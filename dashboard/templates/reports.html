@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<div class="content-area">
+  <h1>Submitted Reports</h1>
+  <div class="form-card">
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th style="text-align: left;">Email</th>
+          <th>Subject</th>
+          <th>Description</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for report in reports %}
+        <tr>
+          <td>{{ report.email }}</td>
+          <td>{{ report.subject }}</td>
+          <td>{{ report.description }}</td>
+          <td>
+            <button style="
+              background-color: red;
+              color: white;
+              border: none;
+              padding: 0.5rem 1rem;
+              border-radius: 5px;
+              cursor: pointer;">
+              Warn
+            </button>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="4" style="text-align:center;">No reports yet.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Register Slots{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="card">
+    <h1>Register Parking Slot</h1>
+    <form class="form-card">
+        <label>Slot Number <input type="text" name="slot_number"></label>
+        <label>Vehicle Type <input type="text" name="vehicle_type"></label>
+        <button type="submit">Submit</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

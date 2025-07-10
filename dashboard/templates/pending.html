@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Pending PWD Verification{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="card">
+    <h1>Pending Verifications</h1>
+    <table>
+        <thead>
+            <tr><th>Name</th><th>Image</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>John Doe</td>
+                <td><img src="{% static 'img/sample_pwd.png' %}" width="100"></td>
+                <td><button class="verify">Verify</button> <button class="decline">Decline</button></td>
+            </tr>
+        </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

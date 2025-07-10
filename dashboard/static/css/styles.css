@@ -1,0 +1,139 @@
+/* ─── Global ─────────────────────────────────────────────────────────── */
+body {
+    margin: 0;
+    font-family: 'Segoe UI', sans-serif;
+    background: #fff292;          /* page background */
+    color: #333;
+}
+
+/* ─── Sidebar (unchanged) ────────────────────────────────────────────── */
+.sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 220px;
+    height: 100vh;
+    background-color: #e8b931;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.sidebar .profile { margin-bottom: 2rem; text-align: center; }
+.avatar { width: 80px; height: 80px; border-radius: 50%; margin-bottom: 0.5rem; }
+.username { font-weight: bold; color: #fff; }
+.nav-link {
+    display: block;
+    padding: 0.5rem;
+    margin: 0.25rem 0;
+    color: #fff;
+    text-decoration: none;
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.10);
+}
+.nav-link:hover { background: rgba(0, 0, 0, 0.20); }
+
+/* ─── Main content area wrapper ──────────────────────────────────────── */
+.content-area {               /* used only in base_user.html for now */
+    margin-left: 240px;
+    padding: 2rem;
+}
+/* For admin templates we wrap each block content with .container > .card */
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+}
+.card, .form-card {
+    background: #fff;
+    padding: 1.5rem 2rem;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.08);
+    margin-top: 1.5rem;
+}
+
+/* ─── Forms & Inputs ─────────────────────────────────────────────────── */
+.form-card label,
+.card label {                  /* label outside form-card too */
+    display: block;
+    margin: 1rem 0 0.4rem;
+    font-weight: 600;
+}
+input, textarea, select {
+    width: 100%;
+    font-size: 1rem;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+}
+textarea { min-height: 120px; resize: vertical; }
+button {
+    width: 100%;
+    padding: 0.75rem;
+    font-weight: 700;
+    border: none;
+    border-radius: 6px;
+    background-color: #e8b931;
+    color: #000;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+button.verify {
+    background-color: #46c551;
+    margin-bottom: 5px;
+}
+
+button.decline {
+    background-color: #f10505;
+}
+
+
+button:hover { background-color: #d4a72d; }
+
+/* ─── Tables ─────────────────────────────────────────────────────────── */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+}
+th, td {
+    border: 1px solid #ddd;
+    padding: 0.75rem;
+    text-align: left;
+}
+th { background: #f1e087; font-weight: 600; }
+tr:nth-child(even) td { background: #faf9d4; }
+
+/* ─── Login Page ─────────────────────────────────────────────────────── */
+.login-page {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background: #fff292;
+}
+.login-box {
+    background: #fff;
+    padding: 2rem 2.5rem;
+    border-radius: 12px;
+    box-shadow: 0 0 15px rgba(0,0,0,0.10);
+    width: 320px;
+}
+.login-box h2 {
+    text-align: center;
+    margin-top: 0;
+    margin-bottom: 1.5rem;
+}
+.form-group { margin-bottom: 1.25rem; }
+
+/* graph */
+
+.full-graph {
+    width: 100%;
+    height: 80vh;
+    object-fit: contain;
+    display: block;
+    margin: 0 auto;
+}
+

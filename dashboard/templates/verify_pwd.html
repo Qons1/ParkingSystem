@@ -1,0 +1,16 @@
+{% extends 'base_user.html' %}
+{% load static %}
+{% block title %}Verify as PWD{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="card">
+    <h1>Submit PWD Verification</h1>
+    <form class="form-card" method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <label>Upload PWD Card</label>
+        <input type="file" name="pwd_card" accept="image/*">
+        <button type="submit">Submit</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
