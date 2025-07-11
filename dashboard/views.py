@@ -6,6 +6,10 @@ import matplotlib.pyplot as plt
 from django.http import HttpResponse
 from django.shortcuts import render, redirect
 from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth import authenticate, login, logout
+from django.contrib import messages
+from accounts.models import CustomUser  # your custom user model
 
 report_entries = []
 
@@ -93,31 +97,58 @@ user_entries = []
 def login_view(request):
     if request.method == "POST":
         email = request.POST.get("email")
-        role  = request.POST.get("role")
+        password = request.POST.get("password")
 
-        user_entries.append({
-            "slot": "–",
-            "plate": "N/A",
-            "name":  email,
-            "contact": "N/A",
-            "type": "Unknown",
-        })
+        try:
+            user_obj = CustomUser.objects.get(email=email)
+            user = authenticate(request, username=user_obj.username, password=password)
+        except CustomUser.DoesNotExist:
+            user = None
 
-        return redirect("monitor" if role == "admin" else "submit_report")
+        if user is not None:
+            login(request, user)
+            return redirect("monitor" if user.is_admin else "submit_report")
+        else:
+            messages.error(request, "Invalid credentials")
+            return redirect("login")
 
     return render(request, "login.html")
 
+def logout_view(request):
+    logout(request)
+    return redirect('login')  # change this to your login page's name
+# admin views
+@login_required
 def monitor(request):
-    return render(request, "monitor.html", {
-        "users": user_entries  # ← passed to show registered users count
-    })
+    if not request.user.is_admin:
+        return redirect('submit_report')  # or any user-only page
+    return render(request, 'monitor.html', {"users": user_entries})
 
-def register_slots(request): return render(request, "register_slots.html")
-def pending(request):        return render(request, "pending.html")
+@login_required
+def register_slots(request):
+    if not request.user.is_admin:
+        return redirect('submit_report')
+    return render(request, 'register_slots.html')
+
+@login_required
+def pending(request):
+    if not request.user.is_admin:
+        return redirect('submit_report')
+    return render(request, 'pending.html')
+
+@login_required
 def reports(request):
-    return render(request, "reports.html", {"reports": report_entries})
+    if not request.user.is_admin:
+        return redirect('submit_report')
+    return render(request, 'reports.html', {"reports": report_entries})
 
-def database(request):       return render(request, "database.html", {"users": user_entries})
+@login_required
+def database(request):
+    if not request.user.is_admin:
+        return redirect('submit_report')
+    return render(request, 'database.html', {"users": user_entries})
+#user views
+@login_required
 def submit_report(request):
     if request.method == 'POST':
         subject = request.POST.get("subject")
@@ -134,5 +165,11 @@ def submit_report(request):
         return redirect("submit_report")  # or redirect somewhere else if needed
 
     return render(request, 'submit_report.html')
-def parking_details(request):return render(request, "parking_details.html")
-def verify_pwd(request):     return render(request, "verify_pwd.html")
+
+@login_required
+def parking_details(request):
+    return render(request, "parking_details.html")
+
+@login_required
+def verify_pwd(request):
+     return render(request, "verify_pwd.html")

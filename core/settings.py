@@ -26,6 +26,9 @@ SECRET_KEY = 'django-insecure-8ioo-o=o_0gi*n&ya4yphezhq@$f0ene%8%=l3efv9$o8u6w0h
 DEBUG = True
 
 ALLOWED_HOSTS = []
+AUTH_USER_MODEL = 'accounts.CustomUser'
+LOGIN_URL = '/login/'
+
 
 
 # Application definition
@@ -38,6 +41,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'dashboard',
+    'accounts',    
 ]
 
 MIDDLEWARE = [
