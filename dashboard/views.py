@@ -2,6 +2,7 @@ import csv, io, os
 import matplotlib
 matplotlib.use("Agg")           # ✅ add this line
 import matplotlib.pyplot as plt
+import random
 
 from django.http import HttpResponse
 from django.shortcuts import render, redirect
@@ -10,6 +11,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from accounts.models import CustomUser  # your custom user model
+from django.utils.safestring import mark_safe
 
 report_entries = []
 
@@ -126,9 +128,63 @@ def monitor(request):
 
 @login_required
 def register_slots(request):
+    # block non‑admins
     if not request.user.is_admin:
-        return redirect('submit_report')
-    return render(request, 'register_slots.html')
+        return redirect("submit_report")
+
+    # ── 1. Handle explicit reset from “Back to Form” button ──────────
+    if request.method == "POST" and request.POST.get("clear_session"):
+        request.session.pop("slot_config", None)
+        return render(request, "register_slots.html", {"generated": False})
+
+    # Fake user info (demo only)
+    fake_users = [
+        "John Doe<br>Plate ABC‑123<br>Contact 0917‑123‑4567",
+        "Jane Smith<br>Plate XYZ‑987<br>Contact 0998‑765‑4321",
+        "Carlos PWD<br>Plate PWD‑001<br>Contact 0908‑555‑0000",
+        "No One<br>Unassigned<br>—",
+    ]
+
+    # ── 2. Handle normal form submission ───────────────
+    if request.method == "POST":
+        floors      = int(request.POST.get("floors"))
+        car_slots   = int(request.POST.get("car_slots"))
+        motor_slots = int(request.POST.get("motor_slots"))
+        pwd_slots   = int(request.POST.get("pwd_slots"))
+
+        request.session["slot_config"] = {
+            "floors": floors,
+            "car":   car_slots,
+            "motor": motor_slots,
+            "pwd":   pwd_slots,
+        }
+
+    # ── 3. If nothing in POST, see if we have session data ───────────
+    config = request.session.get("slot_config")
+    if not config:
+        # First visit — just show blank form
+        return render(request, "register_slots.html", {"generated": False})
+
+    floors      = config["floors"]
+    car_slots   = config["car"]
+    motor_slots = config["motor"]
+    pwd_slots   = config["pwd"]
+
+    # Build layout dict
+    layout = {}
+    for f in range(1, floors + 1):
+        prefix = chr(64 + f)           # A, B, C …
+        layout[f] = {
+            "Car":   [(f"{prefix}C{i}",  random.choice(fake_users)) for i in range(1, car_slots   + 1)],
+            "Motor": [(f"{prefix}M{i}",  random.choice(fake_users)) for i in range(1, motor_slots + 1)],
+            "PWD":   [(f"{prefix}P{i}",  random.choice(fake_users)) for i in range(1, pwd_slots   + 1)],
+        }
+
+    return render(request, "register_slots.html", {
+        "generated": True,
+        "floors": floors,
+        "layout": layout,
+    })
 
 @login_required
 def pending(request):
@@ -146,7 +202,9 @@ def reports(request):
 def database(request):
     if not request.user.is_admin:
         return redirect('submit_report')
-    return render(request, 'database.html', {"users": user_entries})
+
+    users = CustomUser.objects.filter(is_user=True)  # Only show normal users
+    return render(request, 'database.html', {"users": users})
 #user views
 @login_required
 def submit_report(request):

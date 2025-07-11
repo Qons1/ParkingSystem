@@ -3,13 +3,167 @@
 {% block title %}Register Slots{% endblock %}
 {% block content %}
 <div class="container">
+
+  {% if not generated %}
+  <!-- ── FORM ─────────────────────────────────────────────── -->
   <div class="card">
-    <h1>Register Parking Slot</h1>
-    <form class="form-card">
-        <label>Slot Number <input type="text" name="slot_number"></label>
-        <label>Vehicle Type <input type="text" name="vehicle_type"></label>
-        <button type="submit">Submit</button>
+    <h1>Register Parking Slots</h1>
+    <form method="post" class="form-card">
+      {% csrf_token %}
+      <label>No. of Floors
+        <input type="number" name="floors" min="1" value="1" required>
+      </label>
+
+      <label>Car Slots (per floor)
+        <input type="number" name="car_slots" min="0" value="5" required>
+      </label>
+
+      <label>Motorcycle Slots (per floor)
+        <input type="number" name="motor_slots" min="0" value="3" required>
+      </label>
+
+      <label>PWD Slots (per floor)
+        <input type="number" name="pwd_slots" min="0" value="2" required>
+      </label>
+
+      <button type="submit">Generate Layout</button>
     </form>
   </div>
+  {% endif %}
+
+  {% if generated %}
+  <!-- ── GENERATED LAYOUT ─────────────────────────────────── -->
+  <h2>Generated Parking Layout</h2>
+  <p>Total Floors: {{ floors }}</p>
+
+  {% for floor, types in layout.items %}
+    <h3>Floor {{ floor }}</h3>
+
+    {% for label, slot_list in types.items %}
+      <h4 style="margin-top:1rem;">{{ label }} Slots</h4>
+      <div class="slot-grid">
+        {% for slot_name, user_info in slot_list %}
+          <div class="slot-box"
+               data-slot="{{ slot_name }}"
+               data-user="{{ user_info|linebreaksbr }}"
+               tabindex="0">{{ slot_name }}</div>
+        {% endfor %}
+      </div>
+    {% endfor %}
+    <hr>
+  {% endfor %}
+
+  <form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="clear_session" value="1">
+  <button type="submit" class="nav-link"
+          style="margin-top:2rem;background:#e8b931;color:#000;padding:0.5rem 1rem;border-radius:6px;">
+    ← Back to Form
+  </button>
+</form>
+
+
+  {% endif %}
+
 </div>
+<!-- Custom Right-Click Menu -->
+<div id="custom-context-menu">
+  <div id="edit-option">✏️ Edit Slot Name</div>
+  <div id="details-option">👤 View User Details</div>
+</div>
+
+
+<!-- ── JS for double‑click edit & long‑press details ───────── -->
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const menu = document.getElementById("custom-context-menu");
+  let selectedSlot = null;
+
+  document.querySelectorAll(".slot-box").forEach(box => {
+    // Right-click (contextmenu)
+    box.addEventListener("contextmenu", (e) => {
+      e.preventDefault();  // Prevent default right-click
+      selectedSlot = box;
+
+      // Show menu at cursor
+      menu.style.display = "block";
+      menu.style.left = `${e.pageX}px`;
+      menu.style.top = `${e.pageY}px`;
+    });
+
+    // Double-click to toggle edit
+    box.addEventListener("dblclick", () => {
+      box.contentEditable = box.isContentEditable ? "false" : "true";
+      box.focus();
+    });
+  });
+
+  // Hide context menu on click anywhere
+  document.addEventListener("click", () => {
+    menu.style.display = "none";
+  });
+
+  // Handle Edit
+  document.getElementById("edit-option").addEventListener("click", () => {
+    if (selectedSlot) {
+      selectedSlot.contentEditable = "true";
+      selectedSlot.focus();
+    }
+    menu.style.display = "none";
+  });
+
+  // Handle View User Details
+  document.getElementById("details-option").addEventListener("click", () => {
+    if (selectedSlot) {
+      const slot = selectedSlot.dataset.slot;
+      const user = selectedSlot.dataset.user.replace(/<br\s*\/?>/gi, '\n');
+      alert(`Slot: ${slot}\nAssigned to:\n${user}`);
+    }
+    menu.style.display = "none";
+  });
+});
+</script>
+
+
+<!-- ── Styles ──────────────────────────────────────────────── -->
+<style>
+.slot-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(80px,1fr));
+  gap:10px;
+  margin-bottom:1rem;
+}
+.slot-box{
+  text-align:center;
+  padding:.5rem;
+  border:1px solid #ccc;
+  border-radius:6px;
+  font-weight:bold;
+  background:#f7f7f7;
+  user-select:none;
+}
+.slot-box:focus{ outline:2px solid #e8b931; }
+
+#custom-context-menu {
+  display: none;
+  position: absolute;
+  z-index: 1000;
+  background: white;
+  border: 1px solid #ccc;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  border-radius: 6px;
+  font-size: 14px;
+  overflow: hidden;
+}
+#custom-context-menu div {
+  padding: 10px 16px;
+  cursor: pointer;
+}
+#custom-context-menu div:hover {
+  background-color: #f0f0f0;
+}
+
+</style>
 {% endblock %}
+
+
