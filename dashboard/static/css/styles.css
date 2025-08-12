@@ -6,6 +6,14 @@ body {
     color: #333;
 }
 
+/* ─── Main content area (to the right of the sidebar) ─────────────────── */
+main {
+    margin-left: 250px;           /* match .sidebar width */
+    padding: 2rem;                /* breathing room */
+    min-height: 100vh;
+    box-sizing: border-box;
+}
+
 /* ─── Sidebar (unchanged) ────────────────────────────────────────────── */
 .sidebar {
     position: fixed;
@@ -33,15 +41,10 @@ body {
 }
 .nav-link:hover { background: rgba(0, 0, 0, 0.20); }
 
-/* ─── Main content area wrapper ──────────────────────────────────────── */
-.content-area {               /* used only in base_user.html for now */
-    margin-left: 240px;
-    padding: 2rem;
-}
 /* For admin templates we wrap each block content with .container > .card */
 .container {
-    max-width: 900px;
-    margin: 0 auto;
+    width: 100%;
+    margin: 0;                    /* fill available width */
 }
 .card, .form-card {
     background: #fff;

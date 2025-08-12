@@ -1,28 +1,105 @@
 {% extends 'base.html' %}
 {% load static %}
-{% block title %}Database{% endblock %}
+{% block title %}User Database{% endblock %}
 {% block content %}
 <div class="container">
   <div class="card">
-    <h1>Registered Users</h1>
-    <table>
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem;">
+      <h1 style="margin:0;">User Database</h1>
+      <input id="searchInput" type="text" placeholder="Search" style="max-width: 280px; width:100%; padding: .5rem .75rem; border:1px solid #ccc; border-radius:6px;" />
+    </div>
+
+    <table style="margin-top: 1rem;">
       <thead>
         <tr>
-          <th>Username</th>
-          <th>Email</th>
-          <th>Date Joined</th>
+          <th>Slot No.</th>
+          <th>Plate Number</th>
+          <th>Name</th>
+          <th>Contact Number</th>
+          <th>User Type</th>
+          <th>Action</th>
         </tr>
       </thead>
-      <tbody>
-        {% for user in users %}
-        <tr>
-          <td>{{ user.username }}</td>
-          <td>{{ user.email }}</td>
-          <td>{{ user.date_joined }}</td>
+      <tbody id="userTableBody">
+        {# Sample static rows for layout preview only. Will be populated from Firebase later. #}
+        <tr data-slot-id="C1-01" data-entry-time="2025-08-10T10:15:00Z">
+          <td class="slot-cell">C1-01</td>
+          <td>ABC-1234</td>
+          <td>Juan Dela Cruz</td>
+          <td>+63 900 000 0001</td>
+          <td>regular</td>
+          <td><button class="verify">View</button></td>
         </tr>
-        {% endfor %}
+        <tr data-slot-id="P1-02" data-entry-time="2025-08-10T09:55:00Z">
+          <td class="slot-cell">P1-02</td>
+          <td>DEF-5678</td>
+          <td>Maria Santos</td>
+          <td>+63 900 000 0002</td>
+          <td>pwd</td>
+          <td><button class="verify">View</button></td>
+        </tr>
+        <tr data-slot-id="M2-05" data-entry-time="2025-08-10T11:05:00Z">
+          <td class="slot-cell">M2-05</td>
+          <td>MC-9090</td>
+          <td>Pedro Reyes</td>
+          <td>+63 900 000 0003</td>
+          <td>regular</td>
+          <td><button class="verify">View</button></td>
+        </tr>
       </tbody>
     </table>
+
+    <div id="tooltip" style="position:absolute; display:none; background:#333; color:#fff; padding:.4rem .6rem; border-radius:6px; font-size:.85rem; pointer-events:none; z-index:1000;"></div>
   </div>
 </div>
+
+<script>
+// Simple client-side search filter for the static preview
+document.getElementById('searchInput').addEventListener('input', function() {
+  const term = this.value.toLowerCase();
+  const rows = document.querySelectorAll('#userTableBody tr');
+  rows.forEach(row => {
+    row.style.display = row.innerText.toLowerCase().includes(term) ? '' : 'none';
+  });
+});
+
+// 2-second hover tooltip on Slot No. to show entry time
+(function() {
+  const tooltip = document.getElementById('tooltip');
+  let hoverTimer = null;
+
+  function showTooltip(e, text) {
+    tooltip.textContent = 'Time Entered: ' + text;
+    const rect = e.target.getBoundingClientRect();
+    tooltip.style.left = (rect.left + window.scrollX + rect.width / 2) + 'px';
+    tooltip.style.top = (rect.top + window.scrollY - 10) + 'px';
+    tooltip.style.transform = 'translate(-50%, -100%)';
+    tooltip.style.display = 'block';
+  }
+
+  function hideTooltip() {
+    tooltip.style.display = 'none';
+  }
+
+  document.querySelectorAll('#userTableBody .slot-cell').forEach(cell => {
+    cell.addEventListener('mouseenter', (e) => {
+      const row = e.currentTarget.closest('tr');
+      const entryTime = row?.getAttribute('data-entry-time') || '';
+      hoverTimer = setTimeout(() => showTooltip(e, entryTime), 2000);
+    });
+    cell.addEventListener('mouseleave', () => {
+      if (hoverTimer) clearTimeout(hoverTimer);
+      hideTooltip();
+    });
+    cell.addEventListener('mousemove', (e) => {
+      // update position if already visible
+      if (tooltip.style.display === 'block') {
+        tooltip.style.left = (e.pageX) + 'px';
+        tooltip.style.top = (e.pageY - 10) + 'px';
+        tooltip.style.transform = 'translate(-50%, -100%)';
+      }
+    });
+  });
+})();
+</script>
 {% endblock %}

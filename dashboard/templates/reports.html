@@ -2,13 +2,13 @@
 {% load static %}
 {% block title %}Reports{% endblock %}
 {% block content %}
-<div class="content-area">
-  <h1>Submitted Reports</h1>
-  <div class="form-card">
-    <table style="width: 100%; border-collapse: collapse;">
+<div class="container">
+  <div class="card">
+    <h1>Submitted Reports</h1>
+    <table>
       <thead>
         <tr>
-          <th style="text-align: left;">Email</th>
+          <th>Email</th>
           <th>Subject</th>
           <th>Description</th>
           <th>Action</th>
@@ -21,15 +21,7 @@
           <td>{{ report.subject }}</td>
           <td>{{ report.description }}</td>
           <td>
-            <button style="
-              background-color: red;
-              color: white;
-              border: none;
-              padding: 0.5rem 1rem;
-              border-radius: 5px;
-              cursor: pointer;">
-              Warn
-            </button>
+            <button class="decline">Warn</button>
           </td>
         </tr>
         {% empty %}
