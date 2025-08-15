@@ -4,33 +4,95 @@
 {% block content %}
 <div class="container">
   <div class="card">
-    <h1>Submitted Reports</h1>
+    <h1>Incident Reports</h1>
     <table>
       <thead>
         <tr>
-          <th>Email</th>
-          <th>Subject</th>
+          <th>Image</th>
           <th>Description</th>
-          <th>Action</th>
+          <th>Reported By</th>
+          <th>Timestamp</th>
+          <th>Status</th>
         </tr>
       </thead>
-      <tbody>
-        {% for report in reports %}
-        <tr>
-          <td>{{ report.email }}</td>
-          <td>{{ report.subject }}</td>
-          <td>{{ report.description }}</td>
-          <td>
-            <button class="decline">Warn</button>
-          </td>
-        </tr>
-        {% empty %}
-        <tr>
-          <td colspan="4" style="text-align:center;">No reports yet.</td>
-        </tr>
-        {% endfor %}
+      <tbody id="incidentsBody">
+        <tr><td colspan="5" style="text-align:center;color:#777;">Loading…</td></tr>
       </tbody>
     </table>
+    <!-- Image overlay viewer -->
+    <div id="imgOverlay" class="overlay" aria-hidden="true">
+      <img id="imgFull" class="modal-image" alt="Incident image" />
+    </div>
   </div>
 </div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+  import { getDatabase, ref, onValue, get, child } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBM__y-An5IX3zyp8HIhDIH_Lwliq7fSrI",
+    authDomain: "cygo1-c184c.firebaseapp.com",
+    databaseURL: "https://cygo1-c184c-default-rtdb.firebaseio.com",
+    projectId: "cygo1-c184c",
+    storageBucket: "cygo1-c184c.firebasestorage.app",
+    messagingSenderId: "184723022619",
+    appId: "1:184723022619:web:5e6bf5b3fc7d0dfc3229be"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+
+  const tbody = document.getElementById('incidentsBody');
+  onValue(ref(db, '/incidents'), async (snap) => {
+    const data = snap.val() || {};
+    const entries = Object.values(data);
+    // Fetch display names for unique UIDs once
+    const uidSet = new Set(entries.map((r) => r.uid).filter(Boolean));
+    const nameByUid = {};
+    for (const uid of uidSet) {
+      try {
+        const us = await get(child(ref(db), `/users/${uid}/displayName`));
+        nameByUid[uid] = us.exists() ? (us.val() || '') : '';
+      } catch (_) { nameByUid[uid] = ''; }
+    }
+    const rows = entries.map((r) => {
+      const imgUrl = r.imageUrl || '';
+      const img = imgUrl ? `<img src="${imgUrl}" data-full="${imgUrl}" class="incident-thumb" style="height:120px;width:150px;border-radius:4px;cursor:pointer;"/>` : '';
+      const desc = (r.description || '').replace(/</g,'&lt;');
+      const reporter = nameByUid[r.uid] || r.uid || '';
+      const ts = r.timestamp || '';
+      const st = r.status || '';
+      return `<tr>
+        <td style="padding: 2px;text-align:center;">${img}</td>
+        <td>${desc}</td>
+        <td>${reporter}</td>
+        <td>${ts}</td>
+        <td>${st}</td>
+      </tr>`;
+    });
+    tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" style="text-align:center;color:#777;">No incidents.</td></tr>`;
+  });
+
+  // Simple image viewer
+  const overlay = document.getElementById('imgOverlay');
+  const imgFull = document.getElementById('imgFull');
+  tbody.addEventListener('click', (e) => {
+    const t = e.target;
+    if (t && t.classList && t.classList.contains('incident-thumb')) {
+      imgFull.src = t.getAttribute('data-full') || t.src || '';
+      overlay.style.display = 'flex';
+      overlay.setAttribute('aria-hidden', 'false');
+    }
+  });
+  overlay.addEventListener('click', () => {
+    overlay.style.display = 'none';
+    overlay.setAttribute('aria-hidden', 'true');
+    imgFull.src = '';
+  });
+</script>
+<style>
+.overlay{ display:none; position:fixed; inset:0; background: rgba(0,0,0,0.6); z-index: 1300; align-items:center; justify-content:center; padding: 1rem; }
+.modal-image{ max-width: 92vw; max-height: 92vh; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+</style>
 {% endblock %}

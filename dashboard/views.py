@@ -12,6 +12,8 @@ from django.contrib import messages
 from accounts.models import CustomUser  # your custom user model
 from django.utils.safestring import mark_safe
 from django.contrib.auth.decorators import user_passes_test
+from core.firebase import rtdb
+from django.http import JsonResponse
 
 # Role-based decorators
 
@@ -135,11 +137,52 @@ def logout_view(request):
 @login_required
 @admin_required
 def monitor(request):
-    layout = request.session.get('layout')
-    floors = request.session.get('floors')
-    generated = bool(layout and floors)
+    # Try to read from Firebase layout first so saved names persist
+    floors = None
+    layout_for_template = {}
+    try:
+        db = rtdb()
+        fb_layout = db.reference('/configurations/layout').get() or {}
+        floors = fb_layout.get('floors')
+        sbf = fb_layout.get('slotsByFloor', {})
+        # Handle dict or list
+        if isinstance(sbf, dict):
+            items_iter = sbf.items()
+        else:
+            items_iter = enumerate(sbf)
+        for floor_key, types in items_iter:
+            if types is None:
+                continue
+            floor_num = int(floor_key)
+            layout_for_template[floor_num] = {"Car": [], "Motorcycle": [], "PWD": []}
+            for tkey in ("Car", "Motorcycle", "PWD"):
+                slots_list = types.get(tkey, []) if isinstance(types, dict) else []
+                if not isinstance(slots_list, list):
+                    continue
+                for item in slots_list:
+                    if isinstance(item, dict):
+                        sid = item.get('id') or ''
+                        name = item.get('name') or sid
+                    else:
+                        sid = str(item)
+                        name = sid
+                    layout_for_template[floor_num][tkey].append((name, sid))
+    except Exception:
+        layout_for_template = {}
+
+    if not layout_for_template:
+        # Fallback to session-generated layout (use id for both name and id)
+        session_layout = request.session.get('layout') or {}
+        floors = request.session.get('floors')
+        for floor, types in session_layout.items():
+            layout_for_template[floor] = {"Car": [], "Motorcycle": [], "PWD": []}
+            for tkey in ("Car", "Motorcycle", "PWD"):
+                for slot_id, _ in types.get(tkey, []):
+                    layout_for_template[floor][tkey].append((slot_id, slot_id))
+
+    generated = bool(layout_for_template and floors)
     return render(request, "monitor.html", {
-        "layout": layout,
+        "layout": layout_for_template,
         "floors": floors,
         "generated": generated,
     })
@@ -165,6 +208,26 @@ def register_slots(request):
         request.session['layout'] = layout
         request.session['floors'] = floors
 
+        # Push full layout to Firebase (Car, Motorcycle, PWD) with id+name per slot.
+        try:
+            db = rtdb()
+            ref = db.reference("/configurations/layout")
+            # Build a simplified layout: floors and slots per type
+            mobile_layout = {"floors": floors, "slotsByFloor": {}}
+            for floor, types in layout.items():
+                car_slots = [{"id": slot, "name": slot} for slot, _ in types.get("Car", [])]
+                motor_slots = [{"id": slot, "name": slot} for slot, _ in types.get("Motorcycle", [])]
+                pwd_slots_list = [{"id": slot, "name": slot} for slot, _ in types.get("PWD", [])]
+                mobile_layout["slotsByFloor"][str(floor)] = {
+                    "Car": car_slots,
+                    "Motorcycle": motor_slots,
+                    "PWD": pwd_slots_list,
+                }
+            ref.set(mobile_layout)
+        except Exception:
+            # Silent fail in dev; we will configure env later
+            pass
+
         return redirect('monitor')
 
     # If clear_session is posted, clear the session and reload form
@@ -174,6 +237,69 @@ def register_slots(request):
         return redirect('register_slots')
 
     return render(request, "register_slots.html")
+
+@csrf_exempt
+@mall_owner_required
+def save_layout_labels(request):
+    if request.method != 'POST':
+        return JsonResponse({"error": "POST required"}, status=405)
+    try:
+        import json
+        payload = json.loads(request.body.decode('utf-8'))
+        # Expected payload: { labels: { "C1-1": "Custom A1", ... } }
+        labels = payload.get('labels', {})
+        if not isinstance(labels, dict):
+            return JsonResponse({"error": "Invalid labels"}, status=400)
+        db = rtdb()
+        layout_ref = db.reference('/configurations/layout')
+        layout = layout_ref.get() or {}
+        slots_by_floor = (layout or {}).get('slotsByFloor', {})
+        # Normalize floor iteration to handle dict or list structures
+        def floor_iter(sbf):
+            if isinstance(sbf, dict):
+                for k, v in sbf.items():
+                    yield str(k), v
+            elif isinstance(sbf, list):
+                for i, v in enumerate(sbf):
+                    if v is not None:
+                        yield str(i), v
+        changed = False
+        new_sbf = {}
+        for floor_key, types in floor_iter(slots_by_floor):
+            # Ensure types is a dict of categories
+            if not isinstance(types, dict):
+                continue
+            for tkey in ('Car', 'Motorcycle', 'PWD'):
+                slots_list = types.get(tkey, [])
+                if not isinstance(slots_list, list):
+                    continue
+                new_list = []
+                for item in slots_list:
+                    if isinstance(item, dict):
+                        sid = item.get('id')
+                        if sid and sid in labels:
+                            item['name'] = labels[sid]
+                            changed = True
+                        # ensure both id and name exist
+                        if 'id' in item and 'name' not in item:
+                            item['name'] = item['id']
+                        new_list.append(item)
+                    else:
+                        # legacy string; convert to object with name override if provided
+                        sid = str(item)
+                        name = labels.get(sid, sid)
+                        new_list.append({'id': sid, 'name': name})
+                        if sid in labels:
+                            changed = True
+                types[tkey] = new_list
+            new_sbf[floor_key] = types
+        if changed:
+            layout['slotsByFloor'] = new_sbf
+            layout_ref.set(layout)
+        return JsonResponse({"ok": True})
+    except Exception as e:
+        # Return 200 with ok=false so frontend can show a friendly toast
+        return JsonResponse({"ok": False, "error": str(e)})
 
 @mall_owner_required
 def analytics(request):

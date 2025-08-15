@@ -7,16 +7,108 @@
     <h1>Pending Verifications</h1>
     <table>
         <thead>
-            <tr><th>Name</th><th>Image</th><th>Actions</th></tr>
+            <tr><th>Image</th><th>Name</th><th>PWD ID</th><th>Status</th><th>Actions</th></tr>
         </thead>
-        <tbody>
-            <tr>
-                <td>John Doe</td>
-                <td><img src="{% static 'img/sample_pwd.png' %}" width="100"></td>
-                <td><button class="verify">Verify</button> <button class="decline">Decline</button></td>
-            </tr>
+        <tbody id="pwdBody">
+            <tr><td colspan="5" style="text-align:center;color:#777;">Loading…</td></tr>
         </tbody>
     </table>
+    <!-- Image overlay viewer -->
+    <div id="imgOverlay" class="overlay" aria-hidden="true">
+      <img id="imgFull" class="modal-image" alt="PWD image" />
+    </div>
   </div>
 </div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+  import { getDatabase, ref, onValue, update, get, child } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBM__y-An5IX3zyp8HIhDIH_Lwliq7fSrI",
+    authDomain: "cygo1-c184c.firebaseapp.com",
+    databaseURL: "https://cygo1-c184c-default-rtdb.firebaseio.com",
+    projectId: "cygo1-c184c",
+    storageBucket: "cygo1-c184c.firebasestorage.app",
+    messagingSenderId: "184723022619",
+    appId: "1:184723022619:web:5e6bf5b3fc7d0dfc3229be"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+
+  const tbody = document.getElementById('pwdBody');
+  onValue(ref(db, '/pwdRequests'), async (snap) => {
+    const reqs = snap.val() || {};
+    const entries = Object.entries(reqs).filter(([id, r]) => (r?.status || 'none') === 'pending');
+    // In this schema, the key is the UID
+    const uidSet = new Set(entries.map(([id]) => id));
+    const nameByUid = {};
+    for (const uid of uidSet) {
+      try {
+        const snapName = await get(child(ref(db), `/users/${uid}/displayName`));
+        nameByUid[uid] = snapName.exists() ? (snapName.val() || '') : '';
+      } catch (_) { nameByUid[uid] = ''; }
+    }
+    const rows = entries.map(([id, r]) => {
+      const uid = id;
+      const name = nameByUid[uid] || uid;
+      const pwdId = r.pwdNumber || '';
+      const status = r.status || 'pending';
+      const imgUrl = r.imageUrl || '';
+      const img = imgUrl ? `<img src="${imgUrl}" data-full="${imgUrl}" class="pwd-thumb" style="height:90px;border-radius:4px;cursor:pointer;"/>` : '';
+      return `<tr data-id="${id}" data-uid="${uid}">
+        <td>${img}</td>
+        <td>${name}</td>
+        <td>${pwdId}</td>
+        <td>${status}</td>
+        <td>
+          <button class="verify" data-action="approve">Approve</button>
+          <button class="decline" data-action="decline">Decline</button>
+        </td>
+      </tr>`;
+    });
+    tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" style="text-align:center;color:#777;">No pending requests.</td></tr>`;
+  });
+
+  tbody.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button');
+    if (btn) {
+      const tr = btn.closest('tr');
+      const id = tr?.getAttribute('data-id');
+      const uid = tr?.getAttribute('data-uid');
+      if (!id) return;
+      const action = btn.getAttribute('data-action');
+      const newStatus = action === 'approve' ? 'approved' : 'rejected';
+      try {
+        await update(ref(db, `/pwdRequests/${id}`), { status: newStatus });
+        if (uid) {
+          await update(ref(db, `/users/${uid}`), {
+            pwdStatus: newStatus,
+            ...(newStatus === 'approved' ? { isPWD: true } : {})
+          });
+        }
+      } catch (e) {}
+      return;
+    }
+    const img = e.target.closest('.pwd-thumb');
+    if (img) {
+      const overlay = document.getElementById('imgOverlay');
+      const imgFull = document.getElementById('imgFull');
+      imgFull.src = img.getAttribute('data-full') || img.src || '';
+      overlay.style.display = 'flex';
+      overlay.setAttribute('aria-hidden','false');
+    }
+  });
+  const overlay = document.getElementById('imgOverlay');
+  overlay.addEventListener('click', () => {
+    overlay.style.display = 'none';
+    overlay.setAttribute('aria-hidden','true');
+    document.getElementById('imgFull').src = '';
+  });
+</script>
+<style>
+.overlay{ display:none; position:fixed; inset:0; background: rgba(0,0,0,0.6); z-index: 1300; align-items:center; justify-content:center; padding: 1rem; }
+.modal-image{ max-width: 92vw; max-height: 92vh; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+</style>
 {% endblock %}

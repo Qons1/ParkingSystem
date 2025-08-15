@@ -107,16 +107,41 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   if (saveBtn) {
-    saveBtn.addEventListener('click', () => {
+    saveBtn.addEventListener('click', async () => {
       if (!hasUnsaved) return;
-      // Placeholder save (no backend). Show toast.
-      const toast = document.getElementById('save-toast');
-      toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 1600);
-      hasUnsaved = false;
-      saveBtn.style.opacity = '.6';
-      saveBtn.style.cursor = 'not-allowed';
-      saveBtn.disabled = true;
+      const labels = {};
+      document.querySelectorAll('.slot-box').forEach(el => {
+        const slotId = el.dataset.slot;
+        const name = el.textContent.trim();
+        if (slotId && name) labels[slotId] = name;
+      });
+      try {
+        const res = await fetch("{% url 'save_layout_labels' %}", {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ labels })
+        });
+        let ok = res.ok; let errMsg = '';
+        try {
+          const j = await res.json();
+          if (j && j.ok === false) { ok = false; errMsg = j.error || ''; }
+        } catch (_) {}
+        const toast = document.getElementById('save-toast');
+        toast.textContent = ok ? 'Changes saved to Firebase' : ('Save failed' + (errMsg ? (': ' + errMsg) : ''));
+        toast.style.display = 'block';
+        setTimeout(() => { toast.style.display = 'none'; }, 1600);
+        if (ok) {
+          hasUnsaved = false;
+          saveBtn.style.opacity = '.6';
+          saveBtn.style.cursor = 'not-allowed';
+          saveBtn.disabled = true;
+        }
+      } catch (e) {
+        const toast = document.getElementById('save-toast');
+        toast.textContent = 'Save failed';
+        toast.style.display = 'block';
+        setTimeout(() => { toast.style.display = 'none'; }, 1600);
+      }
     });
   }
 

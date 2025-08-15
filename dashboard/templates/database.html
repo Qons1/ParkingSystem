@@ -9,97 +9,127 @@
       <input id="searchInput" type="text" placeholder="Search" style="max-width: 280px; width:100%; padding: .5rem .75rem; border:1px solid #ccc; border-radius:6px;" />
     </div>
 
+    {% if user.is_mall_owner %}
+    <!-- Mall Owner view: pull users from Firebase RTDB (/users) -->
     <table style="margin-top: 1rem;">
       <thead>
         <tr>
-          <th>Slot No.</th>
-          <th>Plate Number</th>
           <th>Name</th>
+          <th>Email</th>
           <th>Contact Number</th>
           <th>User Type</th>
-          <th>Action</th>
+          <th>PWD Status</th>
+          <th>QR Data</th>
+          <th>Active Transaction</th>
         </tr>
       </thead>
-      <tbody id="userTableBody">
-        {# Sample static rows for layout preview only. Will be populated from Firebase later. #}
-        <tr data-slot-id="C1-01" data-entry-time="2025-08-10T10:15:00Z">
-          <td class="slot-cell">C1-01</td>
-          <td>ABC-1234</td>
-          <td>Juan Dela Cruz</td>
-          <td>+63 900 000 0001</td>
-          <td>regular</td>
-          <td><button class="verify">View</button></td>
-        </tr>
-        <tr data-slot-id="P1-02" data-entry-time="2025-08-10T09:55:00Z">
-          <td class="slot-cell">P1-02</td>
-          <td>DEF-5678</td>
-          <td>Maria Santos</td>
-          <td>+63 900 000 0002</td>
-          <td>pwd</td>
-          <td><button class="verify">View</button></td>
-        </tr>
-        <tr data-slot-id="M2-05" data-entry-time="2025-08-10T11:05:00Z">
-          <td class="slot-cell">M2-05</td>
-          <td>MC-9090</td>
-          <td>Pedro Reyes</td>
-          <td>+63 900 000 0003</td>
-          <td>regular</td>
-          <td><button class="verify">View</button></td>
-        </tr>
+      <tbody id="fbUsersBody">
+        <tr><td colspan="7" style="text-align:center;color:#777;">Loading from Firebase…</td></tr>
       </tbody>
     </table>
-
-    <div id="tooltip" style="position:absolute; display:none; background:#333; color:#fff; padding:.4rem .6rem; border-radius:6px; font-size:.85rem; pointer-events:none; z-index:1000;"></div>
+    {% else %}
+    <!-- Admin view (unchanged for now) -->
+    <table style="margin-top: 1rem;">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Email</th>
+          <th>Date Joined</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+        <tr>
+          <td>{{ user.username }}</td>
+          <td>{{ user.email }}</td>
+          <td>{{ user.date_joined }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
   </div>
 </div>
 
-<script>
-// Simple client-side search filter for the static preview
-document.getElementById('searchInput').addEventListener('input', function() {
-  const term = this.value.toLowerCase();
-  const rows = document.querySelectorAll('#userTableBody tr');
-  rows.forEach(row => {
-    row.style.display = row.innerText.toLowerCase().includes(term) ? '' : 'none';
-  });
-});
+{% if user.is_mall_owner %}
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+  import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
-// 2-second hover tooltip on Slot No. to show entry time
-(function() {
-  const tooltip = document.getElementById('tooltip');
-  let hoverTimer = null;
+  // TODO: Replace with your Firebase web app config (from Firebase console → Project settings → Web app)
+  const firebaseConfig = {
+    apiKey: "AIzaSyBM__y-An5IX3zyp8HIhDIH_Lwliq7fSrI",
+    authDomain: "cygo1-c184c.firebaseapp.com",
+    databaseURL: "https://cygo1-c184c-default-rtdb.firebaseio.com",
+    projectId: "cygo1-c184c",
+    storageBucket: "cygo1-c184c.firebasestorage.app",
+    messagingSenderId: "184723022619",
+    appId: "1:184723022619:web:5e6bf5b3fc7d0dfc3229be"
+  };
 
-  function showTooltip(e, text) {
-    tooltip.textContent = 'Time Entered: ' + text;
-    const rect = e.target.getBoundingClientRect();
-    tooltip.style.left = (rect.left + window.scrollX + rect.width / 2) + 'px';
-    tooltip.style.top = (rect.top + window.scrollY - 10) + 'px';
-    tooltip.style.transform = 'translate(-50%, -100%)';
-    tooltip.style.display = 'block';
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+
+  const tbody = document.getElementById('fbUsersBody');
+  const searchEl = document.getElementById('searchInput');
+
+  let usersData = {};
+  let txStatusByUid = {};
+
+  function computeTxStatusMap(transactions) {
+    const map = {};
+    for (const [txId, t] of Object.entries(transactions || {})) {
+      const uid = t?.uid;
+      if (!uid) continue;
+      const status = (t?.status || '').toUpperCase();
+      if (status === 'ONGOING') { map[uid] = 'ONGOING'; continue; }
+      if (!map[uid] && (status === 'PAID' || status === 'COMPLETED')) { map[uid] = 'PAID'; }
+    }
+    return map;
   }
 
-  function hideTooltip() {
-    tooltip.style.display = 'none';
+  function render() {
+    const term = (searchEl.value || '').toLowerCase();
+    const rows = Object.entries(usersData).map(([uid, u]) => {
+      const displayName = u.displayName || '';
+      const email = u.email || '';
+      const contact = u.contactNumber || '';
+      const userType = u.isPWD ? 'pwd' : 'regular';
+      const pwdStatus = u.pwdStatus || 'none';
+      const qrData = u.qrData || '';
+      let activeState = 'NONE';
+      const explicit = u.activeTransaction;
+      if (explicit) { activeState = txStatusByUid[uid] || 'ONGOING'; }
+      else { activeState = txStatusByUid[uid] || 'NONE'; }
+
+      const rowText = `${displayName} ${email} ${contact} ${userType} ${pwdStatus} ${qrData} ${activeState}`.toLowerCase();
+      if (term && !rowText.includes(term)) return '';
+      return `<tr>
+        <td>${displayName}</td>
+        <td>${email}</td>
+        <td>${contact}</td>
+        <td>${userType}</td>
+        <td>${pwdStatus}</td>
+        <td>${qrData}</td>
+        <td>${activeState}</td>
+      </tr>`;
+    }).filter(Boolean);
+    tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="7" style="text-align:center;color:#777;">No users found.</td></tr>`;
   }
 
-  document.querySelectorAll('#userTableBody .slot-cell').forEach(cell => {
-    cell.addEventListener('mouseenter', (e) => {
-      const row = e.currentTarget.closest('tr');
-      const entryTime = row?.getAttribute('data-entry-time') || '';
-      hoverTimer = setTimeout(() => showTooltip(e, entryTime), 2000);
-    });
-    cell.addEventListener('mouseleave', () => {
-      if (hoverTimer) clearTimeout(hoverTimer);
-      hideTooltip();
-    });
-    cell.addEventListener('mousemove', (e) => {
-      // update position if already visible
-      if (tooltip.style.display === 'block') {
-        tooltip.style.left = (e.pageX) + 'px';
-        tooltip.style.top = (e.pageY - 10) + 'px';
-        tooltip.style.transform = 'translate(-50%, -100%)';
-      }
+  onValue(ref(db, '/users'), (snap) => { usersData = snap.val() || {}; render(); });
+  onValue(ref(db, '/transactions'), (snap) => { txStatusByUid = computeTxStatusMap(snap.val()); render(); });
+  searchEl.addEventListener('input', render);
+
+  // Client-side search
+  document.getElementById('searchInput').addEventListener('input', () => {
+    // Trigger re-render by reusing the onValue snapshot (simple approach: let next RTDB event refresh)
+    // For immediate filter, we can re-run onValue handler logic by reading current table and hiding rows
+    const term = (document.getElementById('searchInput').value || '').toLowerCase();
+    Array.from(document.querySelectorAll('#fbUsersBody tr')).forEach(tr => {
+      tr.style.display = tr.innerText.toLowerCase().includes(term) ? '' : 'none';
     });
   });
-})();
 </script>
+{% endif %}
 {% endblock %}
