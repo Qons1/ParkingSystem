@@ -81,13 +81,8 @@
       const action = btn.getAttribute('data-action');
       const newStatus = action === 'approve' ? 'approved' : 'rejected';
       try {
-        await update(ref(db, `/pwdRequests/${id}`), { status: newStatus });
-        if (uid) {
-          await update(ref(db, `/users/${uid}`), {
-            pwdStatus: newStatus,
-            ...(newStatus === 'approved' ? { isPWD: true } : {})
-          });
-        }
+        const endpoint = action === 'approve' ? '{% url "approve_pwd" %}' : '{% url "decline_pwd" %}';
+        await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uid: id }) });
       } catch (e) {}
       return;
     }

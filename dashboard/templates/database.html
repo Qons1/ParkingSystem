@@ -28,23 +28,19 @@
       </tbody>
     </table>
     {% else %}
-    <!-- Admin view (unchanged for now) -->
+    <!-- Admin view: show only users who have entered (occupied slots) -->
     <table style="margin-top: 1rem;">
       <thead>
         <tr>
           <th>Username</th>
-          <th>Email</th>
-          <th>Date Joined</th>
+          <th>Contact Number</th>
+          <th>Slot</th>
+          <th>User Type</th>
+          <th>Active Transaction</th>
         </tr>
       </thead>
-      <tbody>
-        {% for user in users %}
-        <tr>
-          <td>{{ user.username }}</td>
-          <td>{{ user.email }}</td>
-          <td>{{ user.date_joined }}</td>
-        </tr>
-        {% endfor %}
+      <tbody id="adminUsersBody">
+        <tr><td colspan="5" style="text-align:center;color:#777;">Loading active parkers…</td></tr>
       </tbody>
     </table>
     {% endif %}
@@ -53,23 +49,13 @@
 
 {% if user.is_mall_owner %}
 <script type="module">
+  import { firebaseConfig } from "{% static 'js/firebaseConfig.js' %}";
   import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
   import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
-  // TODO: Replace with your Firebase web app config (from Firebase console → Project settings → Web app)
-  const firebaseConfig = {
-    apiKey: "AIzaSyBM__y-An5IX3zyp8HIhDIH_Lwliq7fSrI",
-    authDomain: "cygo1-c184c.firebaseapp.com",
-    databaseURL: "https://cygo1-c184c-default-rtdb.firebaseio.com",
-    projectId: "cygo1-c184c",
-    storageBucket: "cygo1-c184c.firebasestorage.app",
-    messagingSenderId: "184723022619",
-    appId: "1:184723022619:web:5e6bf5b3fc7d0dfc3229be"
-  };
-
-  const app = initializeApp(firebaseConfig);
-  const db = getDatabase(app);
-
+  const appMall = initializeApp(firebaseConfig, 'mall');
+  const dbMall = getDatabase(appMall);
+ 
   const tbody = document.getElementById('fbUsersBody');
   const searchEl = document.getElementById('searchInput');
 
@@ -117,8 +103,8 @@
     tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="7" style="text-align:center;color:#777;">No users found.</td></tr>`;
   }
 
-  onValue(ref(db, '/users'), (snap) => { usersData = snap.val() || {}; render(); });
-  onValue(ref(db, '/transactions'), (snap) => { txStatusByUid = computeTxStatusMap(snap.val()); render(); });
+  onValue(ref(dbMall, '/users'), (snap) => { usersData = snap.val() || {}; render(); });
+  onValue(ref(dbMall, '/transactions'), (snap) => { txStatusByUid = computeTxStatusMap(snap.val()); render(); });
   searchEl.addEventListener('input', render);
 
   // Client-side search
@@ -130,6 +116,59 @@
       tr.style.display = tr.innerText.toLowerCase().includes(term) ? '' : 'none';
     });
   });
+</script>
+{% endif %}
+
+{% if user.is_admin and not user.is_mall_owner %}
+<script type="module">
+  import { firebaseConfig } from "{% static 'js/firebaseConfig.js' %}";
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+  import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+
+  const appAdmin = initializeApp(firebaseConfig, 'admin');
+  const dbAdmin = getDatabase(appAdmin);
+
+  const tbodyAdmin = document.getElementById('adminUsersBody');
+  const searchElAdmin = document.getElementById('searchInput');
+
+  let occupied = {};     // configurations/layout/occupied
+  let usersMap = {};     // users
+  let txMap = {};        // transactions
+
+  function renderAdmin() {
+    const term = (searchElAdmin.value || '').toLowerCase();
+    const rows = Object.entries(occupied)
+      .filter(([key, occ]) => {
+        const st = (occ?.status || '').toString().toUpperCase();
+        return st === 'OCCUPIED';
+      })
+      .map(([key, occ]) => {
+        const uid = occ?.uid || '';
+        const slotName = occ?.slotName || key;
+        const txId = occ?.txId || (usersMap[uid]?.activeTransaction || '');
+        const u = usersMap[uid] || {};
+        const name = u.displayName || u.email || uid;
+        const contact = u.contactNumber || '';
+        const userType = u.isPWD ? 'pwd' : 'regular';
+        const activeState = txId && txMap[txId] && (txMap[txId].status || '').toString().toUpperCase() === 'ONGOING' ? 'ONGOING' : (txId ? 'PAST' : 'NONE');
+        const rowText = `${name} ${contact} ${slotName} ${userType} ${activeState}`.toLowerCase();
+        if (term && !rowText.includes(term)) return '';
+        return `<tr>
+          <td>${name}</td>
+          <td>${contact}</td>
+          <td>${slotName}</td>
+          <td>${userType}</td>
+          <td>${txId ? txId + ' (' + activeState + ')' : 'NONE'}</td>
+        </tr>`;
+      })
+      .filter(Boolean);
+    tbodyAdmin.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" style="text-align:center;color:#777;">No occupied slots.</td></tr>`;
+  }
+
+  onValue(ref(dbAdmin, '/configurations/layout/occupied'), (snap) => { occupied = snap.val() || {}; renderAdmin(); });
+  onValue(ref(dbAdmin, '/users'), (snap) => { usersMap = snap.val() || {}; renderAdmin(); });
+  onValue(ref(dbAdmin, '/transactions'), (snap) => { txMap = snap.val() || {}; renderAdmin(); });
+  searchElAdmin.addEventListener('input', renderAdmin);
 </script>
 {% endif %}
 {% endblock %}

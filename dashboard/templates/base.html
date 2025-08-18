@@ -9,8 +9,17 @@
 <body>
     <div class="sidebar">
         <div class="profile">
-            <img src="{% static 'img/profile.png' %}" alt="Profile" class="avatar">
-            <span class="username">Admin User</span>
+            <img id="admin-avatar" src="{% static 'img/profile.png' %}" alt="Profile" class="avatar" style="cursor:pointer;" data-email="{{ user.email }}" data-username="{{ user.username }}">
+            <input id="avatar-file" type="file" accept="image/*" style="display:none;" />
+            <span class="username">{{ user.email|default:user.username }}</span>
+        </div>
+        <!-- Avatar modal viewer -->
+        <div id="avatarOverlay" class="overlay" aria-hidden="true">
+          <img id="avatarFull" class="modal-image" alt="Profile image" />
+        </div>
+        <!-- Avatar context menu -->
+        <div id="avatar-menu" class="context-menu" style="display:none;">
+          <div id="avatar-change">Change photo…</div>
         </div>
         <nav>
             {% if user.is_authenticated and user.is_mall_owner %}
@@ -31,5 +40,114 @@
     <main>
         {% block content %}{% endblock %}
     </main>
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+      import { getDatabase, ref, get, set, child } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+
+      // Firebase web config (reuse the same values you used on other pages)
+      const firebaseConfig = {
+        apiKey: "AIzaSyBM__y-An5IX3zyp8HIhDIH_Lwliq7fSrI",
+        authDomain: "cygo1-c184c.firebaseapp.com",
+        databaseURL: "https://cygo1-c184c-default-rtdb.firebaseio.com",
+        projectId: "cygo1-c184c",
+        storageBucket: "cygo1-c184c.firebasestorage.app",
+        messagingSenderId: "184723022619",
+        appId: "1:184723022619:web:5e6bf5b3fc7d0dfc3229be"
+      };
+
+      // Cloudinary unsigned upload config
+      const CLOUD_NAME = "dy5kbbskp";            // TODO: replace
+      const UPLOAD_PRESET = "reports_img";             // or your preset name
+
+      const app = initializeApp(firebaseConfig);
+      const db = getDatabase(app);
+
+      const avatarEl = document.getElementById('admin-avatar');
+      const fileEl = document.getElementById('avatar-file');
+
+      function emailKey() {
+        const email = avatarEl?.getAttribute('data-email') || '';
+        const username = avatarEl?.getAttribute('data-username') || '';
+        const keySource = email || username;
+        // Firebase keys cannot contain . # $ [ ] / \
+        return (keySource || 'unknown').replace(/[.#$\[\]\/\\]/g, '_');
+      }
+
+      // Load existing avatar URL if present
+      (async () => {
+        try {
+          const snap = await get(child(ref(db), `/admins/${emailKey()}/profileImageUrl`));
+          if (snap.exists()) {
+            const url = snap.val();
+            if (url) avatarEl.src = url;
+          }
+        } catch (_) {}
+      })();
+
+      // Left-click: open modal viewer
+      avatarEl?.addEventListener('click', () => {
+        const overlay = document.getElementById('avatarOverlay');
+        const full = document.getElementById('avatarFull');
+        full.src = avatarEl.src;
+        overlay.style.display = 'flex';
+        overlay.setAttribute('aria-hidden','false');
+      });
+
+      // Right-click: open context menu with "Change photo"
+      const menu = document.getElementById('avatar-menu');
+      avatarEl?.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        menu.style.display = 'block';
+        menu.style.left = `${e.pageX}px`;
+        menu.style.top = `${e.pageY}px`;
+      });
+      document.addEventListener('click', () => { menu.style.display = 'none'; });
+      document.getElementById('avatar-change')?.addEventListener('click', () => {
+        menu.style.display = 'none';
+        fileEl?.click();
+      });
+
+      fileEl?.addEventListener('change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        try {
+          // Upload to Cloudinary unsigned endpoint
+          const form = new FormData();
+          form.append('file', file);
+          form.append('upload_preset', UPLOAD_PRESET);
+          const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, { method: 'POST', body: form });
+          const data = await res.json();
+          const url = data?.secure_url;
+          if (url) {
+            avatarEl.src = url;
+            await set(ref(db, `/admins/${emailKey()}/profileImageUrl`), url);
+          } else {
+            alert('Upload failed');
+          }
+        } catch (err) {
+          alert('Upload failed');
+        } finally {
+          fileEl.value = '';
+        }
+      });
+
+      // Close avatar modal on click
+      const avatarOverlay = document.getElementById('avatarOverlay');
+      avatarOverlay?.addEventListener('click', () => {
+        avatarOverlay.style.display = 'none';
+        avatarOverlay.setAttribute('aria-hidden','true');
+        const full = document.getElementById('avatarFull');
+        full.src = '';
+      });
+    </script>
+    <style>
+      .profile{ display:flex; flex-direction:column; align-items:center; }
+      .profile .username{ display:block; margin-top:.5rem; max-width: 160px; word-break: break-word; text-align:center; }
+      .overlay{ display:none; position:fixed; inset:0; background: rgba(0,0,0,0.6); z-index: 1300; align-items:center; justify-content:center; padding: 1rem; }
+      .modal-image{ max-width: 92vw; max-height: 92vh; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+      .context-menu{ position:absolute; z-index:1400; background:#fff; border:1px solid #ccc; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.15); font-size:14px; overflow:hidden; }
+      .context-menu div{ padding:10px 14px; cursor:pointer; }
+      .context-menu div:hover{ background:#f0f0f0; }
+    </style>
 </body>
 </html>

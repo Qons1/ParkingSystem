@@ -23,6 +23,9 @@ def mall_owner_required(view_func):
 def admin_required(view_func):
     return user_passes_test(lambda u: u.is_authenticated and (u.is_admin or u.is_mall_owner))(view_func)
 
+def admin_only_required(view_func):
+    return user_passes_test(lambda u: u.is_authenticated and u.is_admin)(view_func)
+
 report_entries = []
 
 # ───────────────────────────────────────────────────────────────
@@ -223,7 +226,14 @@ def register_slots(request):
                     "Motorcycle": motor_slots,
                     "PWD": pwd_slots_list,
                 }
+            # Overwrite layout
             ref.set(mobile_layout)
+            # Clear any existing occupancy since slot mapping changed
+            try:
+                ref.child('occupied').set({})
+            except Exception:
+                # ignore if occupied path does not exist yet
+                pass
         except Exception:
             # Silent fail in dev; we will configure env later
             pass
@@ -299,6 +309,66 @@ def save_layout_labels(request):
         return JsonResponse({"ok": True})
     except Exception as e:
         # Return 200 with ok=false so frontend can show a friendly toast
+        return JsonResponse({"ok": False, "error": str(e)})
+
+# ───────────────────────────────────────────────────────────────
+#  Admin SDK endpoints: PWD approvals (admin or mall owner) and incidents (admin only)
+# ───────────────────────────────────────────────────────────────
+
+@csrf_exempt
+@admin_required
+def approve_pwd(request):
+    if request.method != 'POST':
+        return JsonResponse({"error": "POST required"}, status=405)
+    try:
+        import json
+        payload = json.loads(request.body or '{}')
+        uid = payload.get('uid')
+        if not uid:
+            return JsonResponse({"error": "uid required"}, status=400)
+        db = rtdb()
+        db.reference(f"/pwdRequests/{uid}").update({"status": "approved"})
+        db.reference(f"/users/{uid}").update({"pwdStatus": "approved", "isPWD": True})
+        return JsonResponse({"ok": True})
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)})
+
+@csrf_exempt
+@admin_required
+def decline_pwd(request):
+    if request.method != 'POST':
+        return JsonResponse({"error": "POST required"}, status=405)
+    try:
+        import json
+        payload = json.loads(request.body or '{}')
+        uid = payload.get('uid')
+        if not uid:
+            return JsonResponse({"error": "uid required"}, status=400)
+        db = rtdb()
+        db.reference(f"/pwdRequests/{uid}").update({"status": "rejected"})
+        db.reference(f"/users/{uid}").update({"pwdStatus": "rejected"})
+        return JsonResponse({"ok": True})
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)})
+
+@csrf_exempt
+@admin_only_required
+def resolve_incident(request):
+    if request.method != 'POST':
+        return JsonResponse({"error": "POST required"}, status=405)
+    try:
+        import json, time
+        payload = json.loads(request.body or '{}')
+        incident_id = payload.get('incidentId')
+        if not incident_id:
+            return JsonResponse({"error": "incidentId required"}, status=400)
+        db = rtdb()
+        db.reference(f"/incidents/{incident_id}").update({
+            "status": "RESOLVED",
+            "resolvedAt": int(time.time()*1000)
+        })
+        return JsonResponse({"ok": True})
+    except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)})
 
 @mall_owner_required

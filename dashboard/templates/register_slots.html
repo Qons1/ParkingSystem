@@ -5,7 +5,7 @@
 <div class="container">
   <div class="card">
     <h1>Register Parking Slots</h1>
-    <form method="post" class="form-card">
+    <form method="post" class="form-card" id="register-form">
       {% csrf_token %}
       <label>No. of Floors
         <input type="number" name="floors" min="1" value="1" required>
@@ -23,6 +23,55 @@
     </form>
   </div>
 </div>
+<!-- Centered confirmation modal -->
+<div id="confirm-overlay" class="overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" style="max-width:520px;">
+    <div style="font-size:44px;text-align:center;margin-bottom:.25rem;">⚠️</div>
+    <h2 style="margin:0 0 .5rem 0; text-align:center;">Overwrite current layout?</h2>
+    <p style="margin:0; text-align:center; color:#555;">
+      Generating a new layout will overwrite the current slots configuration and <strong>clear all occupied slots</strong>.
+    </p>
+    <div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem;">
+      <button id="confirm-cancel" type="button" style="background:#fff;border:1px solid #ccc;color:#333;padding:.5rem .9rem;border-radius:8px;cursor:pointer;">Cancel</button>
+      <button id="confirm-proceed" type="button" style="background:#e8b931;border:1px solid #e8b931;color:#000;font-weight:700;padding:.5rem .9rem;border-radius:8px;cursor:pointer;">Proceed</button>
+    </div>
+  </div>
+  <style>
+    /* Align with existing color grading and modal styles used across the app */
+    .overlay{ display:none; position:fixed; inset:0; background: rgba(0,0,0,0.35); z-index: 1200; align-items:center; justify-content:center; padding: 1rem; }
+    .modal-card{ background:#fff; width: 520px; max-width: 92vw; border-radius: 12px; padding: 1.25rem 1.5rem; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  </style>
+</div>
+
+<script>
+  (function(){
+    var form = document.getElementById('register-form');
+    var overlay = document.getElementById('confirm-overlay');
+    var proceedBtn = document.getElementById('confirm-proceed');
+    var cancelBtn = document.getElementById('confirm-cancel');
+    if (!form || !overlay) return;
+
+    var confirmed = false;
+    function showOverlay(){ overlay.style.display = 'flex'; overlay.setAttribute('aria-hidden','false'); }
+    function hideOverlay(){ overlay.style.display = 'none'; overlay.setAttribute('aria-hidden','true'); }
+
+    form.addEventListener('submit', function(e){
+      if (confirmed) { return; }
+      e.preventDefault();
+      showOverlay();
+    });
+
+    cancelBtn?.addEventListener('click', function(){ hideOverlay(); });
+    overlay.addEventListener('click', function(e){ if (e.target === overlay) hideOverlay(); });
+    document.addEventListener('keydown', function(e){ if (e.key === 'Escape') hideOverlay(); });
+
+    proceedBtn?.addEventListener('click', function(){
+      confirmed = true;
+      hideOverlay();
+      form.submit();
+    });
+  })();
+  </script>
 {% endblock %}
 
 

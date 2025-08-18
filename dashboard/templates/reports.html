@@ -26,71 +26,10 @@
   </div>
 </div>
 
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-  import { getDatabase, ref, onValue, get, child } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+<div id="cfg" data-is-admin="{{ user.is_admin|yesno:'true,false' }}"></div>
 
-  const firebaseConfig = {
-    apiKey: "AIzaSyBM__y-An5IX3zyp8HIhDIH_Lwliq7fSrI",
-    authDomain: "cygo1-c184c.firebaseapp.com",
-    databaseURL: "https://cygo1-c184c-default-rtdb.firebaseio.com",
-    projectId: "cygo1-c184c",
-    storageBucket: "cygo1-c184c.firebasestorage.app",
-    messagingSenderId: "184723022619",
-    appId: "1:184723022619:web:5e6bf5b3fc7d0dfc3229be"
-  };
-
-  const app = initializeApp(firebaseConfig);
-  const db = getDatabase(app);
-
-  const tbody = document.getElementById('incidentsBody');
-  onValue(ref(db, '/incidents'), async (snap) => {
-    const data = snap.val() || {};
-    const entries = Object.values(data);
-    // Fetch display names for unique UIDs once
-    const uidSet = new Set(entries.map((r) => r.uid).filter(Boolean));
-    const nameByUid = {};
-    for (const uid of uidSet) {
-      try {
-        const us = await get(child(ref(db), `/users/${uid}/displayName`));
-        nameByUid[uid] = us.exists() ? (us.val() || '') : '';
-      } catch (_) { nameByUid[uid] = ''; }
-    }
-    const rows = entries.map((r) => {
-      const imgUrl = r.imageUrl || '';
-      const img = imgUrl ? `<img src="${imgUrl}" data-full="${imgUrl}" class="incident-thumb" style="height:120px;width:150px;border-radius:4px;cursor:pointer;"/>` : '';
-      const desc = (r.description || '').replace(/</g,'&lt;');
-      const reporter = nameByUid[r.uid] || r.uid || '';
-      const ts = r.timestamp || '';
-      const st = r.status || '';
-      return `<tr>
-        <td style="padding: 2px;text-align:center;">${img}</td>
-        <td>${desc}</td>
-        <td>${reporter}</td>
-        <td>${ts}</td>
-        <td>${st}</td>
-      </tr>`;
-    });
-    tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" style="text-align:center;color:#777;">No incidents.</td></tr>`;
-  });
-
-  // Simple image viewer
-  const overlay = document.getElementById('imgOverlay');
-  const imgFull = document.getElementById('imgFull');
-  tbody.addEventListener('click', (e) => {
-    const t = e.target;
-    if (t && t.classList && t.classList.contains('incident-thumb')) {
-      imgFull.src = t.getAttribute('data-full') || t.src || '';
-      overlay.style.display = 'flex';
-      overlay.setAttribute('aria-hidden', 'false');
-    }
-  });
-  overlay.addEventListener('click', () => {
-    overlay.style.display = 'none';
-    overlay.setAttribute('aria-hidden', 'true');
-    imgFull.src = '';
-  });
-</script>
+<div id="cfg" data-is-admin="{{ user.is_admin|yesno:'true,false' }}" data-resolve-url="{% url 'resolve_incident' %}"></div>
+<script type="module" src="{% static 'js/reports.js' %}"></script>
 <style>
 .overlay{ display:none; position:fixed; inset:0; background: rgba(0,0,0,0.6); z-index: 1300; align-items:center; justify-content:center; padding: 1rem; }
 .modal-image{ max-width: 92vw; max-height: 92vh; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
