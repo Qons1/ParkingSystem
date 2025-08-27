@@ -4,36 +4,30 @@
 {% block content %}
 <div class="container">
   <div class="card">
-  <!-- Graphs Row -->
-  <div style="display: flex; gap: 1rem; padding: 1rem;">
-    <!-- Weekly Entries -->
-    <div style="flex: 1;">
-      <h2 style="text-align: center;">Weekly Entries</h2>
-      <img src="{% url 'entries_graph' %}" alt="Weekly Parking Entries"
-           style="width: 100%; height: auto; aspect-ratio: 16/9; border-radius: 10px;">
+    <!-- Summary Row (server-provided metrics) -->
+    <div style="display:flex; gap: 1rem; padding: 1rem;">
+      <div class="card" style="flex:1; text-align:center;">
+        <h3>Registered Users</h3>
+        <p style="font-size: 1.5rem; font-weight: bold;">{{ registered_users_count }}</p>
+      </div>
+      <div class="card" style="flex:1; text-align:center;">
+        <h3>Weekly Entries</h3>
+        <p style="font-size: 1.5rem; font-weight: bold;">{{ weekly_entries_count }}</p>
+      </div>
     </div>
 
-    <!-- Monthly Earnings -->
-    <div style="flex: 1;">
-      <h2 style="text-align: center;">Monthly Earnings</h2>
-      <img src="{% url 'earnings_graph' %}" alt="Monthly Earnings"
-           style="width: 100%; height: auto; aspect-ratio: 16/9; border-radius: 10px;">
+    <!-- Graphs Row (legacy CSV graphs kept for now; to be replaced later) -->
+    <div style="display: flex; gap: 1rem; padding: 0 1rem 1rem;">
+      <div style="flex: 1;">
+        <h2 style="text-align: center;">Weekly Entries</h2>
+        <img src="{% url 'entries_graph' %}" alt="Weekly Parking Entries"
+             style="width: 100%; height: auto; aspect-ratio: 16/9; border-radius: 10px;">
+      </div>
+      <div style="flex: 1;">
+        <h2 style="text-align: center;">Monthly Earnings</h2>
+        <img src="{% url 'earnings_graph' %}" alt="Monthly Earnings"
+             style="width: 100%; height: auto; aspect-ratio: 16/9; border-radius: 10px;">
+      </div>
     </div>
   </div>
-  <!-- Summary Boxes Row -->
-  <div style="display: flex; gap: 1rem; padding: 0 1rem; margin-top: 1rem;">
-    <div class="card" style="flex: 1; text-align: center;">
-      <h3>Total Earnings</h3>
-      <p style="font-size: 1.5rem; font-weight: bold;">₱325,000</p>
-    </div>
-    <div class="card" style="flex: 1; text-align: center;">
-      <h3>Registered Users</h3>
-      <p style="font-size: 1.5rem; font-weight: bold;">{{ users|length }}</p>
-    </div>
-    <div class="card" style="flex: 1; text-align: center;">
-      <h3>Today's Earnings</h3>
-      <p style="font-size: 1.5rem; font-weight: bold;">₱12,200</p>
-    </div>
-  </div>
- </div>
 {% endblock %}

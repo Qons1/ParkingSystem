@@ -14,6 +14,7 @@ from django.utils.safestring import mark_safe
 from django.contrib.auth.decorators import user_passes_test
 from core.firebase import rtdb
 from django.http import JsonResponse
+from datetime import datetime, timedelta, timezone
 
 # Role-based decorators
 
@@ -373,8 +374,50 @@ def resolve_incident(request):
 
 @mall_owner_required
 def analytics(request):
-    # Your analytics logic here
-    return render(request, "analytics.html")
+    """Mall owner analytics: show registered users count and weekly entries.
+
+    - Registered users: count of keys under /users
+    - Weekly entries: number of transactions with timeIn in current ISO week (Mon-Sun)
+    """
+    registered_users_count = 0
+    weekly_entries_count = 0
+    try:
+        db = rtdb()
+        # Registered users count
+        users_snapshot = db.reference('/users').get() or {}
+        if isinstance(users_snapshot, dict):
+            registered_users_count = len(users_snapshot.keys())
+        elif isinstance(users_snapshot, list):
+            registered_users_count = len([x for x in users_snapshot if x is not None])
+
+        # Weekly entries from /transactions by timeIn
+        now = datetime.now(timezone.utc)
+        # Start of current week (Monday 00:00) in UTC
+        start_of_week = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ms = int(start_of_week.timestamp() * 1000)
+        tx_snapshot = db.reference('/transactions').get() or {}
+        if isinstance(tx_snapshot, dict):
+            for tx in tx_snapshot.values():
+                if not isinstance(tx, dict):
+                    continue
+                t_in = tx.get('timeIn')
+                if isinstance(t_in, (int, float)) and t_in >= start_ms:
+                    weekly_entries_count += 1
+        elif isinstance(tx_snapshot, list):
+            for tx in tx_snapshot:
+                if not isinstance(tx, dict):
+                    continue
+                t_in = tx.get('timeIn')
+                if isinstance(t_in, (int, float)) and t_in >= start_ms:
+                    weekly_entries_count += 1
+    except Exception:
+        # In dev, fail silently and show zeros
+        pass
+
+    return render(request, "analytics.html", {
+        "registered_users_count": registered_users_count,
+        "weekly_entries_count": weekly_entries_count,
+    })
 
     
 @login_required
