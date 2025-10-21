@@ -15,6 +15,7 @@ from django.contrib.auth.decorators import user_passes_test
 from core.firebase import rtdb
 from django.http import JsonResponse
 from datetime import datetime, timedelta, timezone
+import base64, requests
 
 # Role-based decorators
 
@@ -353,7 +354,7 @@ def decline_pwd(request):
         return JsonResponse({"ok": False, "error": str(e)})
 
 @csrf_exempt
-@admin_only_required
+@admin_required
 def resolve_incident(request):
     if request.method != 'POST':
         return JsonResponse({"error": "POST required"}, status=405)
@@ -364,10 +365,20 @@ def resolve_incident(request):
         if not incident_id:
             return JsonResponse({"error": "incidentId required"}, status=400)
         db = rtdb()
-        db.reference(f"/incidents/{incident_id}").update({
-            "status": "RESOLVED",
-            "resolvedAt": int(time.time()*1000)
-        })
+        finalize = bool(payload.get('finalize'))
+        now_ms = int(time.time()*1000)
+        if finalize:
+            db.reference(f"/incidents/{incident_id}").update({
+                "status": "RESOLVED",
+                "resolvedAt": now_ms
+            })
+        else:
+            # Ask user to confirm; auto-resolve after 1 hour
+            db.reference(f"/incidents/{incident_id}").update({
+                "status": "PENDING_USER_CONFIRM",
+                "confirmRequestedAt": now_ms,
+                "confirmDeadline": now_ms + 3600*1000
+            })
         return JsonResponse({"ok": True})
     except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)})
@@ -419,6 +430,108 @@ def analytics(request):
         "weekly_entries_count": weekly_entries_count,
     })
 
+# ───────────────────────────────────────────────────────────────
+#  Live analytics JSON for charts (mall owner/admin)
+# ───────────────────────────────────────────────────────────────
+@login_required
+@admin_required
+def analytics_summary(request):
+    try:
+        db = rtdb()
+
+        # Occupancy
+        occ = db.reference('/configurations/layout/occupied').get() or {}
+        car_occ = 0; motor_occ = 0; pwd_occ = 0
+        if isinstance(occ, dict):
+            for v in occ.values():
+                if not isinstance(v, dict):
+                    continue
+                if str(v.get('status','')).upper() != 'OCCUPIED':
+                    continue
+                vt = str(v.get('vehicleType','')).upper()
+                if vt == 'MOTORCYCLE': motor_occ += 1
+                elif vt == 'PWD': pwd_occ += 1
+                else: car_occ += 1
+
+        # Transactions snapshot
+        txs = db.reference('/transactions').get() or {}
+        if not isinstance(txs, (dict, list)):
+            txs = {}
+
+        now = datetime.now(timezone.utc)
+        start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_yesterday = (start_today - timedelta(days=1))
+        start_week = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+
+        def to_dt(val):
+            # timeIn/Out can be ISO string; sometimes ms epoch in older data
+            try:
+                if isinstance(val, (int, float)):
+                    return datetime.fromtimestamp(float(val)/1000.0, tz=timezone.utc)
+                return datetime.fromisoformat(str(val).replace('Z','+00:00'))
+            except Exception:
+                return None
+
+        today_earn = 0.0; week_earn = 0.0
+        today_entries = 0; yesterday_entries = 0
+        completed_today = 0; started_today = 0
+        stay_mins_sum = 0.0; stay_mins_n = 0
+        hist = [0]*24
+
+        items = txs.items() if isinstance(txs, dict) else enumerate(txs)
+        for _, tx in items:
+            if not isinstance(tx, dict):
+                continue
+            t_in = to_dt(tx.get('timeIn'))
+            t_out = to_dt(tx.get('timeOut'))
+            status = str(tx.get('status','')).upper()
+            amt_paid = float(tx.get('amountPaid') or 0)
+
+            if t_in:
+                if t_in >= start_today:
+                    today_entries += 1
+                    hour = (t_in.astimezone(timezone.utc).hour)
+                    if 0 <= hour < 24:
+                        hist[hour] += 1
+                    started_today += 1
+                elif start_yesterday <= t_in < start_today:
+                    yesterday_entries += 1
+
+            if t_out:
+                if t_out >= start_today:
+                    today_earn += amt_paid
+                    completed_today += 1
+                if t_out >= start_week:
+                    week_earn += amt_paid
+
+            if t_in and t_out:
+                stay = (t_out - t_in).total_seconds()/60.0
+                if stay > 0:
+                    stay_mins_sum += stay
+                    stay_mins_n += 1
+
+        avg_stay = round(stay_mins_sum/stay_mins_n, 1) if stay_mins_n else 0.0
+        conversion = round((completed_today/max(1, started_today))*100.0, 1)
+
+        return JsonResponse({
+            'totals': {
+                'todayEarnings': round(today_earn,2),
+                'weekEarnings': round(week_earn,2),
+                'todayEntries': today_entries,
+                'yesterdayEntries': yesterday_entries,
+                'conversionTodayPct': conversion,
+                'avgStayMinsWeek': avg_stay,
+            },
+            'occupancy': {
+                'car': car_occ,
+                'motorcycle': motor_occ,
+                'pwd': pwd_occ,
+            },
+            'histogramToday': hist,
+        })
+    except Exception as e:
+        return JsonResponse({'ok': False, 'error': str(e)}, status=500)
+
     
 @login_required
 @admin_required
@@ -439,3 +552,250 @@ def database(request):
 @admin_required
 def verify_pwd(request):
      return render(request, "verify_pwd.html")
+
+# ───────────────────────────────────────────────────────────────
+#  Entrance snapshot: fetch from OV2640, upload to Cloudinary, OCR, write to RTDB
+# ───────────────────────────────────────────────────────────────
+@csrf_exempt
+def entrance_snapshot(request):
+    """POST { uid, txId, cameraUrl } → captures JPEG, uploads to Cloudinary (dy5kbbskp),
+    OCRs text (optional via OCR.space if OCR_API_KEY set), writes plate to /transactions/<txId>/plateNumber and /users/<uid>/lastPlate.
+    Returns { ok, url, plate }.
+    """
+    if request.method != 'POST':
+        return JsonResponse({"error": "POST required"}, status=405)
+    try:
+        import json
+        payload = json.loads(request.body or '{}')
+        uid = (payload.get('uid') or '').strip()
+        tx_id = (payload.get('txId') or '').strip()
+        cam_url = (payload.get('cameraUrl') or request.GET.get('cameraUrl') or request.POST.get('cameraUrl') or '').strip()
+        if not (uid and tx_id and cam_url):
+            return JsonResponse({"error": "uid, txId, cameraUrl required"}, status=400)
+
+        # 1) Capture JPEG from OV2640 /capture
+        cap_url = cam_url.rstrip('/') + '/capture'
+        cap_res = requests.get(cap_url, timeout=30)
+        if cap_res.status_code != 200 or not cap_res.content:
+            return JsonResponse({"ok": False, "error": "capture failed"})
+
+        # 2) Upload to Cloudinary (unsigned)
+        cloud = 'dy5kbbskp'
+        upload_preset = os.environ.get('CLOUDINARY_UPLOAD_PRESET', 'unsigned')
+        cld_url = f'https://api.cloudinary.com/v1_1/{cloud}/image/upload'
+        files = { 'file': ('plate.jpg', cap_res.content, 'image/jpeg') }
+        data = { 'upload_preset': upload_preset, 'folder': 'cygo/entry' }
+        cld_res = requests.post(cld_url, files=files, data=data, timeout=30)
+        cld_json = {}
+        try: cld_json = cld_res.json()
+        except Exception: cld_json = {}
+        if cld_res.status_code >= 300 or 'secure_url' not in cld_json:
+            return JsonResponse({"ok": False, "error": "cloudinary upload failed", "status": cld_res.status_code})
+        secure_url = cld_json['secure_url']
+
+        # 3) OCR (optional via OCR.space) – with fallback and plate pattern extraction
+        def extract_plate(raw: str) -> str:
+            import re
+            s = (raw or '').upper().replace('\n', ' ').replace('\r',' ')
+            s = ' '.join(s.split())
+            # common confusions
+            s = s.replace('0', 'O') if s.count('0') <= 3 else s
+            s = s.replace('1', 'I') if s.count('1') <= 3 else s
+            # PH-like: ABC 123 or ABC 1234; also allow 2 letters + up to 4 digits
+            m = re.search(r'([A-Z]{2,4})\s*[- ]?\s*(\d{2,4})', s)
+            return (m.group(1) + ' ' + m.group(2)) if m else s if s else ''
+
+        plate_text = ''
+        ocr_key = os.environ.get('OCR_API_KEY')
+        if ocr_key:
+            try:
+                ocr_api = 'https://api.ocr.space/parse/image'
+                # First try Engine 2
+                resp = requests.post(
+                    ocr_api,
+                    data={'apikey': ocr_key, 'language': 'eng', 'scale': 'true', 'OCREngine': 2, 'url': secure_url},
+                    timeout=25
+                )
+                js = resp.json()
+                if not js.get('IsErroredOnProcessing'):
+                    pars = js.get('ParsedResults') or []
+                    raw = (pars[0].get('ParsedText') or '') if pars else ''
+                    plate_text = extract_plate(raw)
+                # Fallback to Engine 1 if empty
+                if not plate_text:
+                    resp1 = requests.post(
+                        ocr_api,
+                        data={'apikey': ocr_key, 'language': 'eng', 'scale': 'true', 'OCREngine': 1, 'url': secure_url},
+                        timeout=25
+                    )
+                    js1 = resp1.json()
+                    if not js1.get('IsErroredOnProcessing'):
+                        pars1 = js1.get('ParsedResults') or []
+                        raw1 = (pars1[0].get('ParsedText') or '') if pars1 else ''
+                        plate_text = extract_plate(raw1)
+            except Exception:
+                pass
+
+        # 4) Write to RTDB (only per-transaction fields; no writes to users/lastPlate)
+        db = rtdb()
+        try:
+            if plate_text:
+                db.reference(f'/transactions/{tx_id}').update({'plateNumber': plate_text, 'plateImageUrl': secure_url})
+            else:
+                db.reference(f'/transactions/{tx_id}').update({'plateImageUrl': secure_url})
+        except Exception as e:
+            return JsonResponse({'ok': False, 'error': f'RTDB write failed: {e}', 'url': secure_url})
+
+        # Read back current tx snapshot for debugging visibility
+        try:
+            tx_snapshot = db.reference(f'/transactions/{tx_id}').get() or {}
+        except Exception:
+            tx_snapshot = {}
+        return JsonResponse({ 'ok': True, 'url': secure_url, 'plate': plate_text, 'txId': tx_id, 'tx': tx_snapshot })
+    except Exception as e:
+        return JsonResponse({ 'ok': False, 'error': str(e) })
+
+# ───────────────────────────────────────────────────────────────
+#  Surveillance (admin or mall owner)
+# ───────────────────────────────────────────────────────────────
+@login_required
+@admin_required
+def surveillance(request):
+    """Simple page that embeds an ESP32-CAM MJPEG stream.
+
+    The template will read a default URL from context and allow override via localStorage.
+    """
+    # Sensible default; template can override from localStorage UI
+    default_stream_url = request.GET.get('url') or "http://192.168.1.150:81/stream"
+    return render(request, "surveillance.html", {"default_stream_url": default_stream_url})
+
+# ───────────────────────────────────────────────────────────────
+#  Mock payment flow (for testing mobile app without real GCash)
+# ───────────────────────────────────────────────────────────────
+@csrf_exempt
+def mockpay_start(request):
+    """GET /mockpay/start?txId=&amount=
+    Render a mock checkout UI styled to resemble GCash.
+    """
+    tx_id = request.GET.get('txId') or ''
+    amount = request.GET.get('amount') or '0'
+    try:
+        amt = float(amount)
+        amount_disp = f"₱{amt:,.2f}"
+    except Exception:
+        amount_disp = f"₱{amount}"
+    merchant_name = "CYGO Parking"
+    account_label = "GCash"
+    html = f"""
+    <!doctype html>
+    <html lang='en'>
+    <head>
+      <meta charset='utf-8'/>
+      <meta name='viewport' content='width=device-width, initial-scale=1'/>
+      <title>GCash - Pay</title>
+      <style>
+        :root {{
+          --gcash-blue: #007BFF;
+          --gcash-blue-dark: #0052CC;
+          --bg: #f2f5f8;
+          --text: #1c1c1c;
+        }}
+        * {{ box-sizing: border-box; }}
+        body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif; background: var(--bg); color: var(--text); }}
+        .appbar {{ background: linear-gradient(135deg, var(--gcash-blue), var(--gcash-blue-dark)); color: #fff; padding: 14px 16px; display: flex; align-items: center; gap: 10px; }}
+        .logo {{ width: 28px; height: 28px; border-radius: 8px; background: rgba(255,255,255,.2); display:flex; align-items:center; justify-content:center; font-weight:700; }}
+        .title {{ font-weight: 700; font-size: 16px; }}
+        .container {{ max-width: 440px; margin: 18px auto; padding: 0 14px; }}
+        .card {{ background: #fff; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.06); padding: 16px; margin-bottom: 14px; }}
+        .row {{ display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #f0f0f0; }}
+        .row:last-child {{ border-bottom: none; }}
+        .label {{ color: #666; font-size: 14px; }}
+        .value {{ font-weight: 600; }}
+        .amount {{ font-size: 28px; font-weight: 800; letter-spacing: .3px; }}
+        .btn {{ width: 100%; padding: 14px; background: var(--gcash-blue); border: none; color: #fff; font-weight: 700; border-radius: 10px; cursor: pointer; box-shadow: 0 8px 18px rgba(0,123,255,.25); }}
+        .btn:disabled {{ opacity: .7; cursor: not-allowed; }}
+        .muted {{ color: #888; font-size: 12px; text-align: center; margin-top: 10px; }}
+      </style>
+    </head>
+    <body>
+      <div class='appbar'>
+        <div class='logo'>G</div>
+        <div class='title'>GCash</div>
+      </div>
+      <div class='container'>
+        <div class='card'>
+          <div class='row'><div class='label'>Pay to</div><div class='value'>{merchant_name}</div></div>
+          <div class='row'><div class='label'>Method</div><div class='value'>{account_label}</div></div>
+          <div class='row'><div class='label'>Reference (TxID)</div><div class='value' style='overflow:hidden;text-overflow:ellipsis;max-width:60%; text-align:right;'>{tx_id}</div></div>
+        </div>
+
+        <div class='card'>
+          <div class='row'><div class='label'>Amount Due</div><div class='amount'>{amount_disp}</div></div>
+          <div class='row'><div class='label'>Convenience Fee</div><div class='value'>₱0.00</div></div>
+          <div class='row'><div class='label'>Total</div><div class='amount'>{amount_disp}</div></div>
+        </div>
+
+        <form class='card' action='/mockpay/complete' method='POST' onsubmit="document.getElementById('paybtn').disabled=true; document.getElementById('paybtn').innerText='Processing…';">
+          <input type='hidden' name='txId' value='{tx_id}'/>
+          <input type='hidden' name='amount' value='{amount}'/>
+          <button id='paybtn' type='submit' class='btn'>Pay Now</button>
+          <div class='muted'>This is a mock checkout for testing only.</div>
+        </form>
+      </div>
+    </body>
+    </html>
+    """
+    return HttpResponse(html)
+
+@csrf_exempt
+def mockpay_complete(request):
+    """POST from mockpay_start form; marks payment as completed in RTDB and renders a success page."""
+    try:
+        tx_id = request.POST.get('txId') or ''
+        amount = request.POST.get('amount') or '0'
+        db = rtdb()
+        if tx_id:
+            db.reference(f'/payments/{tx_id}').set({
+                'txId': tx_id,
+                'amount': float(amount or 0),
+                'method': 'MOCKPAY',
+                'referenceNumber': 'MOCK-' + tx_id[:6],
+                'status': 'PAID',
+                'createdAt': datetime.utcnow().isoformat() + 'Z'
+            })
+            db.reference(f'/transactions/{tx_id}').update({
+                'status': 'COMPLETED',
+                'amountPaid': float(amount or 0),
+                'timeOut': int(datetime.utcnow().timestamp()*1000)
+            })
+        html = """
+        <!doctype html>
+        <html lang='en'>
+        <head>
+          <meta charset='utf-8'/>
+          <meta name='viewport' content='width=device-width, initial-scale=1'/>
+          <title>GCash - Success</title>
+          <style>
+            body { margin:0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, 'Noto Sans', sans-serif; background:#f2f5f8; color:#1c1c1c; }
+            .appbar { background: linear-gradient(135deg, #007BFF, #0052CC); color:#fff; padding:14px 16px; font-weight:700; }
+            .container { max-width: 440px; margin: 22px auto; padding: 0 14px; }
+            .card { background:#fff; border-radius:14px; box-shadow:0 10px 30px rgba(0,0,0,.06); padding:22px; text-align:center; }
+            .check { font-size:44px; color:#0aaf5c; }
+            .btn { margin-top:14px; display:inline-block; padding:10px 16px; background:#007BFF; color:#fff; border-radius:10px; text-decoration:none; }
+          </style>
+        </head>
+        <body>
+          <div class='appbar'>GCash</div>
+          <div class='container'>
+            <div class='card'>
+              <div class='check'>✔</div>
+              <h3 style='margin:10px 0 8px;'>Payment Successful</h3>
+              <div style='color:#666;'>You can close this page and return to the app.</div>
+            </div>
+          </div>
+        </body>
+        </html>
+        """
+        return HttpResponse(html)
+    except Exception as e:
+        return HttpResponse(f"<html><body>Failed: {e}</body></html>", status=500)

@@ -26,10 +26,8 @@
   </div>
 </div>
 
-<div id="cfg" data-is-admin="{{ user.is_admin|yesno:'true,false' }}"></div>
-
-<div id="cfg" data-is-admin="{{ user.is_admin|yesno:'true,false' }}" data-resolve-url="{% url 'resolve_incident' %}"></div>
-<script type="module" src="{% static 'js/reports.js' %}"></script>
+<div id="cfg" data-is-admin="{% if user.is_admin or user.is_mall_owner %}true{% else %}false{% endif %}" data-resolve-url="{% url 'resolve_incident' %}"></div>
+<script type="module" src="{% static 'js/reports.js' %}?v={% now 'U' %}"></script>
 <style>
 .overlay{ display:none; position:fixed; inset:0; background: rgba(0,0,0,0.6); z-index: 1300; align-items:center; justify-content:center; padding: 1rem; }
 .modal-image{ max-width: 92vw; max-height: 92vh; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }

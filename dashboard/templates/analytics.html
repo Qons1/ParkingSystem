@@ -4,30 +4,83 @@
 {% block content %}
 <div class="container">
   <div class="card">
-    <!-- Summary Row (server-provided metrics) -->
-    <div style="display:flex; gap: 1rem; padding: 1rem;">
-      <div class="card" style="flex:1; text-align:center;">
-        <h3>Registered Users</h3>
-        <p style="font-size: 1.5rem; font-weight: bold;">{{ registered_users_count }}</p>
+    <div style="display:flex; gap:1rem; padding: 1rem; flex-wrap: wrap;">
+      <div class="card" style="flex:1; text-align:center; min-width: 220px;">
+        <h3>Today's Earnings</h3>
+        <p id="kpi-today" style="font-size: 1.6rem; font-weight: bold;">₱0.00</p>
       </div>
-      <div class="card" style="flex:1; text-align:center;">
-        <h3>Weekly Entries</h3>
-        <p style="font-size: 1.5rem; font-weight: bold;">{{ weekly_entries_count }}</p>
+      <div class="card" style="flex:1; text-align:center; min-width: 220px;">
+        <h3>This Week</h3>
+        <p id="kpi-week" style="font-size: 1.6rem; font-weight: bold;">₱0.00</p>
+      </div>
+      <div class="card" style="flex:1; text-align:center; min-width: 220px;">
+        <h3>Entries (Today / Yesterday)</h3>
+        <p id="kpi-entries" style="font-size: 1.2rem; font-weight: bold;">0 / 0</p>
+      </div>
+      <div class="card" style="flex:1; text-align:center; min-width: 220px;">
+        <h3>Conversion Today</h3>
+        <p id="kpi-conversion" style="font-size: 1.6rem; font-weight: bold;">0%</p>
+      </div>
+      <div class="card" style="flex:1; text-align:center; min-width: 220px;">
+        <h3>Avg Stay (mins, week)</h3>
+        <p id="kpi-avgstay" style="font-size: 1.6rem; font-weight: bold;">0.0</p>
       </div>
     </div>
 
-    <!-- Graphs Row (legacy CSV graphs kept for now; to be replaced later) -->
-    <div style="display: flex; gap: 1rem; padding: 0 1rem 1rem;">
-      <div style="flex: 1;">
-        <h2 style="text-align: center;">Weekly Entries</h2>
-        <img src="{% url 'entries_graph' %}" alt="Weekly Parking Entries"
-             style="width: 100%; height: auto; aspect-ratio: 16/9; border-radius: 10px;">
+    <div style="display:flex; gap:1rem; padding: 0 1rem 1rem; flex-wrap: wrap;">
+      <div class="card" style="flex:1; min-width: 320px; padding: 1rem;">
+        <h3>Occupancy (live)</h3>
+        <canvas id="chartOcc" height="120"></canvas>
       </div>
-      <div style="flex: 1;">
-        <h2 style="text-align: center;">Monthly Earnings</h2>
-        <img src="{% url 'earnings_graph' %}" alt="Monthly Earnings"
-             style="width: 100%; height: auto; aspect-ratio: 16/9; border-radius: 10px;">
+      <div class="card" style="flex:2; min-width: 420px; padding: 1rem;">
+        <h3>Entries per Hour (Today)</h3>
+        <canvas id="chartHist" height="120"></canvas>
       </div>
     </div>
   </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  let chartOcc, chartHist;
+  async function loadSummary(){
+    try{
+      const res = await fetch('/api/analytics/summary', {cache: 'no-store'});
+      if(!res.ok){ return; }
+      const data = await res.json();
+      const t = data.totals || {}; const o = data.occupancy || {}; const h = data.histogramToday || [];
+      document.getElementById('kpi-today').textContent = '₱' + (Number(t.todayEarnings||0)).toFixed(2);
+      document.getElementById('kpi-week').textContent = '₱' + (Number(t.weekEarnings||0)).toFixed(2);
+      document.getElementById('kpi-entries').textContent = (t.todayEntries||0) + ' / ' + (t.yesterdayEntries||0);
+      document.getElementById('kpi-conversion').textContent = (Number(t.conversionTodayPct||0)).toFixed(1) + '%';
+      document.getElementById('kpi-avgstay').textContent = (Number(t.avgStayMinsWeek||0)).toFixed(1);
+
+      const occLabels = ['Car','Motorcycle','PWD'];
+      const occData = [Number(o.car||0), Number(o.motorcycle||0), Number(o.pwd||0)];
+      if(!chartOcc){
+        chartOcc = new Chart(document.getElementById('chartOcc'), {
+          type: 'doughnut',
+          data: { labels: occLabels, datasets: [{ data: occData, backgroundColor:['#ffd54f','#90caf9','#a5d6a7'] }] },
+          options: { responsive:true, plugins:{ legend:{ position:'bottom' } } }
+        });
+      } else {
+        chartOcc.data.datasets[0].data = occData; chartOcc.update('none');
+      }
+
+      const hours = Array.from({length:24}, (_,i)=> (i<10?'0':'')+i+':00');
+      const hist = (h.length===24)? h : Array(24).fill(0);
+      if(!chartHist){
+        chartHist = new Chart(document.getElementById('chartHist'), {
+          type: 'bar',
+          data: { labels: hours, datasets: [{ label:'Entries', data: hist, backgroundColor:'#ffe082' }] },
+          options: { responsive:true, scales:{ x:{ ticks:{ maxRotation:0, autoSkip:true } }, y:{ beginAtZero:true } } }
+        });
+      } else {
+        chartHist.data.datasets[0].data = hist; chartHist.update('none');
+      }
+    }catch(_){ }
+  }
+  loadSummary();
+  setInterval(loadSummary, 15000);
+</script>
 {% endblock %}

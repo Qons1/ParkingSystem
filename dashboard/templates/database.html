@@ -19,12 +19,11 @@
           <th>Contact Number</th>
           <th>User Type</th>
           <th>PWD Status</th>
-          <th>QR Data</th>
           <th>Active Transaction</th>
         </tr>
       </thead>
       <tbody id="fbUsersBody">
-        <tr><td colspan="7" style="text-align:center;color:#777;">Loading from Firebase…</td></tr>
+        <tr><td colspan="8" style="text-align:center;color:#777;">Loading from Firebase…</td></tr>
       </tbody>
     </table>
     {% else %}
@@ -36,6 +35,7 @@
           <th>Contact Number</th>
           <th>Slot</th>
           <th>User Type</th>
+          <th>Plate no.</th>
           <th>Active Transaction</th>
         </tr>
       </thead>
@@ -82,13 +82,13 @@
       const contact = u.contactNumber || '';
       const userType = u.isPWD ? 'pwd' : 'regular';
       const pwdStatus = u.pwdStatus || 'none';
-      const qrData = u.qrData || '';
+      const qrData = '';
       let activeState = 'NONE';
       const explicit = u.activeTransaction;
       if (explicit) { activeState = txStatusByUid[uid] || 'ONGOING'; }
       else { activeState = txStatusByUid[uid] || 'NONE'; }
 
-      const rowText = `${displayName} ${email} ${contact} ${userType} ${pwdStatus} ${qrData} ${activeState}`.toLowerCase();
+      const rowText = `${displayName} ${email} ${contact} ${userType} ${pwdStatus} ${activeState}`.toLowerCase();
       if (term && !rowText.includes(term)) return '';
       return `<tr>
         <td>${displayName}</td>
@@ -96,11 +96,10 @@
         <td>${contact}</td>
         <td>${userType}</td>
         <td>${pwdStatus}</td>
-        <td>${qrData}</td>
         <td>${activeState}</td>
       </tr>`;
     }).filter(Boolean);
-    tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="7" style="text-align:center;color:#777;">No users found.</td></tr>`;
+    tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="6" style="text-align:center;color:#777;">No users found.</td></tr>`;
   }
 
   onValue(ref(dbMall, '/users'), (snap) => { usersData = snap.val() || {}; render(); });
@@ -153,16 +152,18 @@
         const activeState = txId && txMap[txId] && (txMap[txId].status || '').toString().toUpperCase() === 'ONGOING' ? 'ONGOING' : (txId ? 'PAST' : 'NONE');
         const rowText = `${name} ${contact} ${slotName} ${userType} ${activeState}`.toLowerCase();
         if (term && !rowText.includes(term)) return '';
+        const plate = ((txId && txMap[txId] && txMap[txId].plateNumber) || '').toString();
         return `<tr>
           <td>${name}</td>
           <td>${contact}</td>
           <td>${slotName}</td>
           <td>${userType}</td>
+          <td>${plate}</td>
           <td>${txId ? txId + ' (' + activeState + ')' : 'NONE'}</td>
         </tr>`;
       })
       .filter(Boolean);
-    tbodyAdmin.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="5" style="text-align:center;color:#777;">No occupied slots.</td></tr>`;
+    tbodyAdmin.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="6" style="text-align:center;color:#777;">No occupied slots.</td></tr>`;
   }
 
   onValue(ref(dbAdmin, '/configurations/layout/occupied'), (snap) => { occupied = snap.val() || {}; renderAdmin(); });

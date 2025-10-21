@@ -29,6 +29,7 @@
             {% if user.is_authenticated %}
                 {% if user.is_admin or user.is_mall_owner %}
                     <a href="{% url 'monitor' %}" class="nav-link">Monitor</a>
+                    <a href="{% url 'surveillance' %}" class="nav-link">Surveillance</a>
                     <a href="{% url 'pending' %}" class="nav-link">Pending PWD Verification</a>
                     <a href="{% url 'reports' %}" class="nav-link">Reports</a>
                     <a href="{% url 'database' %}" class="nav-link">Database</a>

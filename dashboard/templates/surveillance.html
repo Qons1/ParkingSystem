@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Surveillance{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="card" style="display:flex; flex-direction:column; gap:1rem;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+      <h1 style="margin:0;">Surveillance</h1>
+      <div style="display:flex; gap:.5rem; align-items:center;">
+        <input id="streamUrl" type="text" placeholder="ESP32-CAM stream URL (e.g., http://ip:81/stream)"
+               style="min-width:320px; max-width:520px; width:100%; padding:.5rem .75rem; border:1px solid #ccc; border-radius:6px;" />
+        <button id="applyUrl" class="nav-link" style="background:#333; color:#fff;">Apply</button>
+        <button id="saveUrl" class="nav-link" style="background:#e8b931; color:#000;">Save</button>
+      </div>
+    </div>
+
+    <div class="form-card" style="padding:0; overflow:hidden;">
+      <div id="videoWrap" style="background:#000; display:flex; align-items:center; justify-content:center; min-height:420px;">
+        <img id="mjpeg" alt="Live camera" style="max-width:100%; height:auto; display:none;" />
+        <div id="placeholder" style="color:#bbb; text-align:center; padding:2rem;">
+          <p>Enter an ESP32-CAM MJPEG stream URL and click Apply.</p>
+          <p style="font-size:12px; color:#888;">Typical format: http://192.168.x.x:81/stream</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const input = document.getElementById('streamUrl');
+  const applyBtn = document.getElementById('applyUrl');
+  const saveBtn = document.getElementById('saveUrl');
+  const img = document.getElementById('mjpeg');
+  const ph = document.getElementById('placeholder');
+
+  const DEFAULT_URL = '{{ default_stream_url|escapejs }}';
+  const KEY = 'surveillance.streamUrl';
+
+  function getSaved(){
+    try { return localStorage.getItem(KEY) || ''; } catch(_) { return ''; }
+  }
+  function save(url){
+    try { localStorage.setItem(KEY, url||''); } catch(_) {}
+  }
+  function setStream(url){
+    const trimmed = (url||'').trim();
+    if(!trimmed){
+      img.style.display = 'none';
+      ph.style.display = 'block';
+      img.src = '';
+      return;
+    }
+    // To force refresh on Apply clicks, append a cache-busting query param
+    const bust = Date.now();
+    img.src = trimmed + (trimmed.includes('?') ? '&' : '?') + 't=' + bust;
+    img.onload = () => { img.style.display = 'block'; ph.style.display = 'none'; };
+    img.onerror = () => { img.style.display = 'none'; ph.style.display = 'block'; };
+  }
+
+  const initial = getSaved() || DEFAULT_URL;
+  input.value = initial || '';
+  if(initial){ setStream(initial); }
+
+  applyBtn.addEventListener('click', () => setStream(input.value));
+  saveBtn.addEventListener('click', () => { save(input.value); alert('Saved'); });
+})();
+</script>
+{% endblock %}
+
+
