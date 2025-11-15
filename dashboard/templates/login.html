@@ -11,6 +11,10 @@
       <label>Password <input type="password" name="password" required></label>
       <button type="submit">Login</button>
     </form>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:.75rem;">
+      <a href="{% url 'password_reset' %}" style="font-size:.9rem; color:#103d85; text-decoration:none;">Forgot password?</a>
+      <a href="{% url 'register' %}" class="btn" style="padding:.5rem .9rem; background:#e6f0ff; color:#103d85; border-radius:8px; text-decoration:none; font-weight:700;">Register</a>
+    </div>
     <p style="text-align:center;margin-top:1rem; font-size: 0.9rem; color:#666;">
       Admin/Mall Owner access only.
     </p>

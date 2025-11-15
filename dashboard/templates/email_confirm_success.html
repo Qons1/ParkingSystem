@@ -1,0 +1,16 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head><link rel="stylesheet" href="{% static 'css/styles.css' %}"></head>
+<body class="login-page">
+  <div class="login-box">
+    <h2>Email Confirmed</h2>
+    <p>Your email has been verified. You can now log in.</p>
+    <div style="text-align:center; margin-top:1rem;">
+      <a href="{% url 'login' %}">Go to Login</a>
+    </div>
+  </div>
+</body>
+</html>
+
+

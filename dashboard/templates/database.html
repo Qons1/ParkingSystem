@@ -9,9 +9,17 @@
       <input id="searchInput" type="text" placeholder="Search" style="max-width: 280px; width:100%; padding: .5rem .75rem; border:1px solid #ccc; border-radius:6px;" />
     </div>
 
+    <!-- Tabs -->
+    <div style="display:flex; gap:.5rem; margin-top:.75rem;">
+      <button id="tabBtnParking" class="btn" style="background:#e6f0ff; color:#103d85;">Parking</button>
+      <button id="tabBtnTx" class="btn" style="background:#f3f3f3; color:#333;">Transactions</button>
+    </div>
+
+    <!-- Parking Tab -->
+    <div id="tabParking" style="margin-top: 1rem;">
     {% if user.is_mall_owner %}
     <!-- Mall Owner view: pull users from Firebase RTDB (/users) -->
-    <table style="margin-top: 1rem;">
+    <table>
       <thead>
         <tr>
           <th>Name</th>
@@ -20,15 +28,16 @@
           <th>User Type</th>
           <th>PWD Status</th>
           <th>Active Transaction</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody id="fbUsersBody">
-        <tr><td colspan="8" style="text-align:center;color:#777;">Loading from Firebase…</td></tr>
+        <tr><td colspan="7" style="text-align:center;color:#777;">Loading from Firebase…</td></tr>
       </tbody>
     </table>
     {% else %}
     <!-- Admin view: show only users who have entered (occupied slots) -->
-    <table style="margin-top: 1rem;">
+    <table>
       <thead>
         <tr>
           <th>Username</th>
@@ -36,14 +45,41 @@
           <th>Slot</th>
           <th>User Type</th>
           <th>Plate no.</th>
+          <th>Plate Image</th>
           <th>Active Transaction</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody id="adminUsersBody">
-        <tr><td colspan="5" style="text-align:center;color:#777;">Loading active parkers…</td></tr>
+        <tr><td colspan="8" style="text-align:center;color:#777;">No data yet…</td></tr>
       </tbody>
     </table>
     {% endif %}
+    </div>
+
+    <!-- Transactions Tab -->
+    <div id="tabTransactions" style="display:none; margin-top: 1rem;">
+      <div class="table-scroll-x">
+        <table style="min-width: 1100px;">
+          <thead>
+            <tr>
+              <th>Tx ID</th>
+              <th>User</th>
+              <th>Vehicle</th>
+              <th>Slot</th>
+              <th>Time In</th>
+              <th>Time Out</th>
+              <th>Status</th>
+              <th>Amount Paid</th>
+              <th>Plate</th>
+            </tr>
+          </thead>
+          <tbody id="txBody">
+            <tr><td colspan="9" style="text-align:center;color:#777;">Loading transactions…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -51,22 +87,30 @@
 <script type="module">
   import { firebaseConfig } from "{% static 'js/firebaseConfig.js' %}";
   import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-  import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+  import { getDatabase, ref, onValue, update, remove } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
   const appMall = initializeApp(firebaseConfig, 'mall');
   const dbMall = getDatabase(appMall);
  
   const tbody = document.getElementById('fbUsersBody');
+  const txBody = document.getElementById('txBody');
   const searchEl = document.getElementById('searchInput');
+  const messageBox = document.getElementById('messageBox');
+  const deleteModal = document.getElementById('deleteModal');
+  const deleteModalText = document.getElementById('deleteModalText');
+  const deleteCancelBtn = document.getElementById('deleteCancelBtn');
+  const deleteConfirmBtn = document.getElementById('deleteConfirmBtn');
+
+  let pendingDeleteUid = null;
 
   let usersData = {};
   let txStatusByUid = {};
+  let txMap = {};
 
   function computeTxStatusMap(transactions) {
     const map = {};
     for (const [txId, t] of Object.entries(transactions || {})) {
-      const uid = t?.uid;
-      if (!uid) continue;
+      const uid = t?.uid; if (!uid) continue;
       const status = (t?.status || '').toUpperCase();
       if (status === 'ONGOING') { map[uid] = 'ONGOING'; continue; }
       if (!map[uid] && (status === 'PAID' || status === 'COMPLETED')) { map[uid] = 'PAID'; }
@@ -74,7 +118,10 @@
     return map;
   }
 
-  function render() {
+  function fmt(iso){ try{ return new Date(iso).toLocaleString(); }catch(_){ return iso||''; } }
+  function money(n){ const x = Number(n||0); return isFinite(x) ? `₱${x.toFixed(2)}` : '₱0.00'; }
+
+  function renderUsers() {
     const term = (searchEl.value || '').toLowerCase();
     const rows = Object.entries(usersData).map(([uid, u]) => {
       const displayName = u.displayName || '';
@@ -82,7 +129,6 @@
       const contact = u.contactNumber || '';
       const userType = u.isPWD ? 'pwd' : 'regular';
       const pwdStatus = u.pwdStatus || 'none';
-      const qrData = '';
       let activeState = 'NONE';
       const explicit = u.activeTransaction;
       if (explicit) { activeState = txStatusByUid[uid] || 'ONGOING'; }
@@ -90,21 +136,54 @@
 
       const rowText = `${displayName} ${email} ${contact} ${userType} ${pwdStatus} ${activeState}`.toLowerCase();
       if (term && !rowText.includes(term)) return '';
-      return `<tr>
-        <td>${displayName}</td>
-        <td>${email}</td>
-        <td>${contact}</td>
-        <td>${userType}</td>
-        <td>${pwdStatus}</td>
-        <td>${activeState}</td>
-      </tr>`;
+      const actions = `
+        <div class=\"actions\"> 
+          <button class=\"btn btn-edit mall-edit\" data-uid=\"${uid}\">Edit</button>
+          <button class=\"btn btn-save mall-save\" data-uid=\"${uid}\" style=\"display:none;\">Save</button>
+          <button class=\"btn btn-cancel mall-cancel\" data-uid=\"${uid}\" style=\"display:none;\">Cancel</button>
+          <button class=\"btn btn-del mall-del\" data-uid=\"${uid}\">Delete</button>
+        </div>`;
+      return `<tr data-uid=\"${uid}\">\n        <td class=\"c-name\">${displayName}</td>\n        <td class=\"c-email\">${email}</td>\n        <td class=\"c-contact\">${contact}</td>\n        <td class=\"c-type\">${userType}</td>\n        <td class=\"c-pwd\">${pwdStatus}</td>\n        <td class=\"c-active\">${activeState}</td>\n        <td>${actions}</td>\n      </tr>`;
     }).filter(Boolean);
-    tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="6" style="text-align:center;color:#777;">No users found.</td></tr>`;
+    tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan=\"7\" style=\"text-align:center;color:#777;\">No users found.</td></tr>`;
   }
 
-  onValue(ref(dbMall, '/users'), (snap) => { usersData = snap.val() || {}; render(); });
-  onValue(ref(dbMall, '/transactions'), (snap) => { txStatusByUid = computeTxStatusMap(snap.val()); render(); });
-  searchEl.addEventListener('input', render);
+  function renderTx(){
+    // Build name lookup once
+    const term = (searchEl.value || '').toLowerCase();
+    const rows = Object.entries(txMap).map(([txId, t])=>{
+      const uid = t?.uid || '';
+      const u = usersData[uid] || {};
+      const name = u.displayName || u.email || uid;
+      const veh = (t?.vehicleType || '').toString();
+      const slot = (t?.slot || '').toString();
+      const tin = fmt(t?.timeIn);
+      const tout = fmt(t?.timeOut);
+      const st  = (t?.status || '').toString();
+      const paid= money(t?.amountPaid);
+      const plate = (t?.plateNumber || '').toString();
+      const rowText = `${txId} ${name} ${veh} ${slot} ${st} ${plate}`.toLowerCase();
+      if (term && !rowText.includes(term)) return '';
+      return `<tr>\n  <td>${txId}</td>\n  <td>${name}</td>\n  <td>${veh}</td>\n  <td>${slot||'-'}</td>\n  <td>${tin||'-'}</td>\n  <td>${tout||'-'}</td>\n  <td>${st}</td>\n  <td>${paid}</td>\n  <td>${plate}</td>\n</tr>`;
+    }).filter(Boolean);
+    txBody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan=\"9\" style=\"text-align:center;color:#777;\">No transactions found.</td></tr>`;
+  }
+
+  onValue(ref(dbMall, '/users'), (snap) => { usersData = snap.val() || {}; renderUsers(); renderTx(); });
+  onValue(ref(dbMall, '/transactions'), (snap) => { const v = snap.val() || {}; txMap = v; txStatusByUid = computeTxStatusMap(v); renderUsers(); renderTx(); });
+  searchEl.addEventListener('input', ()=>{ renderUsers(); renderTx(); });
+
+  // Tabs
+  const tabBtnParking = document.getElementById('tabBtnParking');
+  const tabBtnTx = document.getElementById('tabBtnTx');
+  const tabParking = document.getElementById('tabParking');
+  const tabTx = document.getElementById('tabTransactions');
+  function showTab(which){
+    if (which==='tx'){ tabTx.style.display='block'; tabParking.style.display='none'; tabBtnTx.style.background='#e6f0ff'; tabBtnParking.style.background='#f3f3f3'; }
+    else { tabTx.style.display='none'; tabParking.style.display='block'; tabBtnParking.style.background='#e6f0ff'; tabBtnTx.style.background='#f3f3f3'; }
+  }
+  tabBtnParking.addEventListener('click', ()=> showTab('parking'));
+  tabBtnTx.addEventListener('click', ()=> showTab('tx'));
 
   // Client-side search
   document.getElementById('searchInput').addEventListener('input', () => {
@@ -115,6 +194,107 @@
       tr.style.display = tr.innerText.toLowerCase().includes(term) ? '' : 'none';
     });
   });
+
+  // Inline Edit/Save/Cancel/Delete handlers (mall owner)
+  tbody.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button'); if (!btn) return;
+    const uid = btn.getAttribute('data-uid'); if (!uid) return;
+    const tr = btn.closest('tr');
+    const nameCell = tr.querySelector('.c-name');
+    const contactCell = tr.querySelector('.c-contact');
+    const typeCell = tr.querySelector('.c-type');
+    const pwdCell = tr.querySelector('.c-pwd');
+    const editBtn = tr.querySelector('.mall-edit');
+    const saveBtn = tr.querySelector('.mall-save');
+    const cancelBtn = tr.querySelector('.mall-cancel');
+
+    if (btn.classList.contains('mall-edit')){
+      // store originals
+      nameCell.dataset.orig = nameCell.textContent || '';
+      contactCell.dataset.orig = contactCell.textContent || '';
+      typeCell.dataset.orig = (typeCell.textContent || 'regular').trim();
+      pwdCell.dataset.orig = (pwdCell.textContent || 'none').trim();
+      // inputs
+      nameCell.innerHTML = `<input value="${nameCell.dataset.orig}"/>`;
+      contactCell.innerHTML = `<input value="${contactCell.dataset.orig}"/>`;
+      typeCell.innerHTML = `<select><option value="regular">regular</option><option value="pwd">pwd</option></select>`;
+      typeCell.querySelector('select').value = typeCell.dataset.orig;
+      pwdCell.innerHTML = `<select><option value="none">none</option><option value="pending">pending</option><option value="approved">approved</option><option value="rejected">rejected</option></select>`;
+      pwdCell.querySelector('select').value = pwdCell.dataset.orig;
+      editBtn.style.display='none'; tr.querySelector('.mall-del').style.display='none';
+      saveBtn.style.display='inline-block'; cancelBtn.style.display='inline-block';
+    } else if (btn.classList.contains('mall-cancel')){
+      // restore originals
+      nameCell.textContent = nameCell.dataset.orig || '';
+      contactCell.textContent = contactCell.dataset.orig || '';
+      typeCell.textContent = typeCell.dataset.orig || 'regular';
+      pwdCell.textContent = pwdCell.dataset.orig || 'none';
+      editBtn.style.display='inline-block'; tr.querySelector('.mall-del').style.display='inline-block';
+      saveBtn.style.display='none'; cancelBtn.style.display='none';
+    } else if (btn.classList.contains('mall-save')){
+      const newName = nameCell.querySelector('input').value.trim();
+      const newContact = contactCell.querySelector('input').value.trim();
+      const newType = typeCell.querySelector('select').value;
+      const newPwd = pwdCell.querySelector('select').value;
+      try {
+        await update(ref(dbMall, '/users/' + uid), {
+          displayName: newName,
+          contactNumber: newContact,
+          isPWD: newType === 'pwd',
+          pwdStatus: newPwd,
+        });
+        usersData[uid] = { ...(usersData[uid]||{}), displayName:newName, contactNumber:newContact, isPWD:(newType==='pwd'), pwdStatus:newPwd };
+        renderUsers();
+      } catch(err){ alert('Save failed'); }
+    } else if (btn.classList.contains('mall-del')){
+      const u = usersData[uid] || {};
+      if (u.activeTransaction){
+        showMessage('Cannot delete: user has an active transaction.', true);
+        return;
+      }
+      const displayName = (tr.querySelector('.c-name')?.textContent || '').trim();
+      pendingDeleteUid = uid;
+      deleteModalText.textContent = `Delete user "${displayName || uid}"? This removes their account and profile.`;
+      deleteModal.classList.add('show');
+    }
+  });
+
+  function showMessage(msg, isError = false){
+    if (!messageBox) return;
+    messageBox.textContent = msg;
+    messageBox.className = isError ? 'flash-msg flash-error' : 'flash-msg flash-success';
+    messageBox.style.display = 'block';
+    setTimeout(()=>{ messageBox.style.display = 'none'; }, 4000);
+  }
+
+  deleteCancelBtn?.addEventListener('click', ()=>{
+    deleteModal?.classList.remove('show');
+    pendingDeleteUid = null;
+  });
+
+  deleteConfirmBtn?.addEventListener('click', async ()=>{
+    if (!pendingDeleteUid) return;
+    try {
+      const res = await fetch('/api/delete-user/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: pendingDeleteUid })
+      });
+      const js = await res.json().catch(()=>({}));
+      if (!res.ok || js.ok === false) {
+        throw new Error(js.error || 'Request failed');
+      }
+      delete usersData[pendingDeleteUid];
+      renderUsers();
+      showMessage('User deleted.');
+    } catch(err){
+      console.error(err);
+      showMessage('Delete failed. ' + (err.message || ''), true);
+    } finally {
+      pendingDeleteUid = null;
+      deleteModal?.classList.remove('show');
+    }
+  });
 </script>
 {% endif %}
 
@@ -122,12 +302,13 @@
 <script type="module">
   import { firebaseConfig } from "{% static 'js/firebaseConfig.js' %}";
   import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-  import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+  import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
   const appAdmin = initializeApp(firebaseConfig, 'admin');
   const dbAdmin = getDatabase(appAdmin);
 
   const tbodyAdmin = document.getElementById('adminUsersBody');
+  const txBody = document.getElementById('txBody');
   const searchElAdmin = document.getElementById('searchInput');
 
   let occupied = {};     // configurations/layout/occupied
@@ -137,10 +318,7 @@
   function renderAdmin() {
     const term = (searchElAdmin.value || '').toLowerCase();
     const rows = Object.entries(occupied)
-      .filter(([key, occ]) => {
-        const st = (occ?.status || '').toString().toUpperCase();
-        return st === 'OCCUPIED';
-      })
+      .filter(([key, occ]) => { const st = (occ?.status || '').toString().toUpperCase(); return st === 'OCCUPIED'; })
       .map(([key, occ]) => {
         const uid = occ?.uid || '';
         const slotName = occ?.slotName || key;
@@ -150,26 +328,118 @@
         const contact = u.contactNumber || '';
         const userType = u.isPWD ? 'pwd' : 'regular';
         const activeState = txId && txMap[txId] && (txMap[txId].status || '').toString().toUpperCase() === 'ONGOING' ? 'ONGOING' : (txId ? 'PAST' : 'NONE');
-        const rowText = `${name} ${contact} ${slotName} ${userType} ${activeState}`.toLowerCase();
-        if (term && !rowText.includes(term)) return '';
         const plate = ((txId && txMap[txId] && txMap[txId].plateNumber) || '').toString();
-        return `<tr>
-          <td>${name}</td>
-          <td>${contact}</td>
-          <td>${slotName}</td>
-          <td>${userType}</td>
-          <td>${plate}</td>
-          <td>${txId ? txId + ' (' + activeState + ')' : 'NONE'}</td>
-        </tr>`;
+        const plateImg = ((txId && txMap[txId] && txMap[txId].plateImageUrl) || '').toString();
+        const rowText = `${name} ${contact} ${slotName} ${userType} ${activeState} ${plate}`.toLowerCase();
+        if (term && !rowText.includes(term)) return '';
+        return `<tr data-slot="${slotName}">\n          <td>${name}</td>\n          <td>${contact}</td>\n          <td>${slotName}</td>\n          <td>${userType}</td>\n          <td>${plate}</td>\n          <td>${plateImg ? `<img class="plate-thumb" src="${plateImg}" data-url="${plateImg}" alt="Plate" style="height:48px;object-fit:cover;border-radius:4px;cursor:pointer;" onerror="this.style.display='none'"/>` : '-'}</td>\n          <td>${txId ? txId + ' (' + activeState + ')' : 'NONE'}</td>\n          <td><button class="btn btn-del force-remove" data-slot="${slotName}">Force Remove</button></td>\n        </tr>`;
       })
       .filter(Boolean);
-    tbodyAdmin.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="6" style="text-align:center;color:#777;">No occupied slots.</td></tr>`;
+    tbodyAdmin.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="8" style="text-align:center;color:#777;">No occupied slots.</td></tr>`;
+  }
+
+  function fmt(iso){ try{ return new Date(iso).toLocaleString(); }catch(_){ return iso||''; } }
+  function money(n){ const x = Number(n||0); return isFinite(x) ? `₱${x.toFixed(2)}` : '₱0.00'; }
+
+  function renderTx(){
+    const term = (searchElAdmin.value || '').toLowerCase();
+    const rows = Object.entries(txMap).map(([txId, t])=>{
+      const uid = t?.uid || '';
+      const u = usersMap[uid] || {};
+      const name = u.displayName || u.email || uid;
+      const veh = (t?.vehicleType || '').toString();
+      const slot = (t?.slot || '').toString();
+      const tin = fmt(t?.timeIn);
+      const tout = fmt(t?.timeOut);
+      const st  = (t?.status || '').toString();
+      const paid= money(t?.amountPaid);
+      const plate = (t?.plateNumber || '').toString();
+      const rowText = `${txId} ${name} ${veh} ${slot} ${st} ${plate}`.toLowerCase();
+      if (term && !rowText.includes(term)) return '';
+      return `<tr>\n  <td>${txId}</td>\n  <td>${name}</td>\n  <td>${veh}</td>\n  <td>${slot||'-'}</td>\n  <td>${tin||'-'}</td>\n  <td>${tout||'-'}</td>\n  <td>${st}</td>\n  <td>${paid}</td>\n  <td>${plate}</td>\n</tr>`;
+    }).filter(Boolean);
+    txBody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="9" style="text-align:center;color:#777;">No transactions found.</td></tr>`;
   }
 
   onValue(ref(dbAdmin, '/configurations/layout/occupied'), (snap) => { occupied = snap.val() || {}; renderAdmin(); });
-  onValue(ref(dbAdmin, '/users'), (snap) => { usersMap = snap.val() || {}; renderAdmin(); });
-  onValue(ref(dbAdmin, '/transactions'), (snap) => { txMap = snap.val() || {}; renderAdmin(); });
-  searchElAdmin.addEventListener('input', renderAdmin);
+  onValue(ref(dbAdmin, '/users'), (snap) => { usersMap = snap.val() || {}; renderAdmin(); renderTx(); });
+  onValue(ref(dbAdmin, '/transactions'), (snap) => { txMap = snap.val() || {}; renderAdmin(); renderTx(); });
+  searchElAdmin.addEventListener('input', ()=>{ renderAdmin(); renderTx(); });
+
+  // Image modal logic
+  const imgModal = document.getElementById('imgModal');
+  const imgModalImg = document.getElementById('imgModalImg');
+  function openImgModal(url){ if (!url) return; imgModalImg.src = url; imgModal.classList.add('show'); }
+  function closeImgModal(){ imgModal.classList.remove('show'); imgModalImg.src=''; }
+  document.getElementById('adminUsersBody')?.addEventListener('click', (e)=>{
+    const img = e.target.closest('img.plate-thumb');
+    if (img){ e.preventDefault(); openImgModal(img.getAttribute('data-url')); }
+  });
+  imgModal.addEventListener('click', (e)=>{ if (e.target === imgModal) closeImgModal(); });
+  window.addEventListener('keydown', (e)=>{ if (e.key === 'Escape') closeImgModal(); });
+
+  // Force remove handler (admin)
+  document.getElementById('adminUsersBody')?.addEventListener('click', async (e)=>{
+    const btn = e.target.closest('button'); if (!btn) return;
+    if (!btn.classList.contains('force-remove')) return;
+    const slotName = btn.getAttribute('data-slot'); if (!slotName) return;
+    if (!confirm('Free this slot?')) return;
+    const safeKey = slotName.replaceAll('/', '_').replaceAll('.', '_').replaceAll('#','_').replaceAll('[','(').replaceAll(']',')');
+    try { await set(ref(dbAdmin, '/configurations/layout/occupied/' + safeKey), { status: 'FREE' }); } catch(err){ alert('Failed to free slot'); }
+  });
+
+  // Tabs
+  const tabBtnParking = document.getElementById('tabBtnParking');
+  const tabBtnTx = document.getElementById('tabBtnTx');
+  const tabParking = document.getElementById('tabParking');
+  const tabTx = document.getElementById('tabTransactions');
+  function showTab(which){
+    if (which==='tx'){ tabTx.style.display='block'; tabParking.style.display='none'; tabBtnTx.style.background='#e6f0ff'; tabBtnParking.style.background='#f3f3f3'; }
+    else { tabTx.style.display='none'; tabParking.style.display='block'; tabBtnParking.style.background='#e6f0ff'; tabBtnTx.style.background='#f3f3f3'; }
+  }
+  tabBtnParking.addEventListener('click', ()=> showTab('parking'));
+  tabBtnTx.addEventListener('click', ()=> showTab('tx'));
 </script>
 {% endif %}
+<style>
+  .actions{ display:flex; flex-wrap:wrap; gap:6px; }
+  .btn{ padding:.35rem .6rem; border:none; border-radius:8px; cursor:pointer; font-weight:700; }
+  .btn-edit{ background:#e6f0ff; color:#103d85; }
+  .btn-save{ background:#e7f8ed; color:#0e7a3d; }
+  .btn-cancel{ background:#fff1cf; color:#9a6a00; }
+  .btn-del{ background:#ffe1e1; color:#b40000; }
+  .btn:hover{ filter:brightness(.98); }
+  .img-modal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:1000; }
+  .img-modal.show{ display:flex; }
+  .img-modal::before{ content:''; position:absolute; inset:0; background:rgba(0,0,0,.6); }
+  .img-modal-content{ position:relative; z-index:1; max-width:90vw; max-height:90vh; }
+  .img-modal-content img{ max-width:90vw; max-height:90vh; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.3); }
+  .table-scroll-x{ overflow-x:auto; }
+  .flash-msg{ display:none; margin:12px 0; padding:.6rem .75rem; border-radius:8px; font-weight:600; }
+  .flash-success{ background:#e7f8ed; color:#0e7a3d; }
+  .flash-error{ background:#ffe1e1; color:#b40000; }
+  .modal-backdrop{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:16px; background:rgba(0,0,0,.45); z-index:1300; }
+  .modal-backdrop.show{ display:flex; }
+  .modal-box{ background:#fff; border-radius:12px; max-width:360px; width:100%; padding:1.2rem; box-shadow:0 12px 30px rgba(0,0,0,.18); }
+  .modal-actions{ display:flex; gap:.75rem; justify-content:flex-end; margin-top:1.2rem; }
+  .modal-actions button{ padding:.45rem .9rem; border:none; border-radius:8px; cursor:pointer; font-weight:600; }
+  .modal-actions .secondary{ background:#f3f3f3; color:#333; }
+  .modal-actions .danger{ background:#ffe1e1; color:#b40000; }
+</style>
+<div id="messageBox" class="flash-msg"></div>
+<div id="imgModal" class="img-modal">
+  <div class="img-modal-content">
+    <img id="imgModalImg" src="" alt="Plate Image" />
+  </div>
+</div>
+<div id="deleteModal" class="modal-backdrop" aria-hidden="true">
+  <div class="modal-box">
+    <h3 style="margin-top:0;">Delete User</h3>
+    <p id="deleteModalText"></p>
+    <div class="modal-actions">
+      <button type="button" id="deleteCancelBtn" class="secondary">Cancel</button>
+      <button type="button" id="deleteConfirmBtn" class="danger">Delete</button>
+    </div>
+  </div>
+</div>
 {% endblock %}

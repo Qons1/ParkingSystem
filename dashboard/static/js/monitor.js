@@ -2,6 +2,7 @@ import { firebaseConfig } from './firebaseConfig.js';
 
 const cfgEl = document.getElementById('cfg');
 const canEdit = (cfgEl?.dataset?.canEdit || 'false') === 'true';
+const canAssign = (cfgEl?.dataset?.canAssign || 'false') === 'true';
 const saveUrl = cfgEl?.dataset?.saveUrl || '';
 
 const menu = document.getElementById('custom-context-menu');
@@ -82,12 +83,13 @@ function enableSave() {
 })();
 
 document.querySelectorAll('.slot-box').forEach(box => {
-  // Keep right-click ONLY for rename (mall owner)
+  // Right-click menu visibility depends on role flags
   box.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     selectedSlot = box;
-    menu.style.display = canEdit ? 'block' : 'none';
-    if (canEdit) {
+    const showMenu = (canEdit || canAssign);
+    menu.style.display = showMenu ? 'block' : 'none';
+    if (showMenu) {
       menu.style.left = `${e.pageX}px`;
       menu.style.top = `${e.pageY}px`;
     }
@@ -127,11 +129,66 @@ document.querySelectorAll('.slot-box').forEach(box => {
 document.addEventListener('click', () => { menu.style.display = 'none'; });
 
 const editBtn = document.getElementById('edit-option');
+const assignBtn = document.getElementById('assign-user-option');
+const assignOverlay = document.getElementById('assign-overlay');
+const assignSlotName = document.getElementById('assign-slot-name');
+const assignSelect = document.getElementById('assign-user-select');
+const assignCancel = document.getElementById('assign-cancel');
+const assignConfirm = document.getElementById('assign-confirm');
 if (editBtn) {
   editBtn.addEventListener('click', () => {
     if (!canEdit) return;
     if (selectedSlot) { selectedSlot.contentEditable = 'true'; selectedSlot.focus(); }
     menu.style.display = 'none';
+  });
+}
+if (assignBtn) {
+  assignBtn.addEventListener('click', async () => {
+    try {
+      menu.style.display = 'none';
+      if (!selectedSlot || !assignOverlay) return;
+      const slotName = selectedSlot.dataset.slot;
+      assignSlotName && (assignSlotName.textContent = slotName);
+      // load candidates
+      const appMod = await import('https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js');
+      const dbMod = await import('https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js');
+      const app = appMod.getApps && appMod.getApps().length ? appMod.getApp() : appMod.initializeApp(firebaseConfig);
+      const db = dbMod.getDatabase(app);
+      const [usersSnap, txSnap] = await Promise.all([
+        dbMod.get(dbMod.ref(db, '/users')),
+        dbMod.get(dbMod.ref(db, '/transactions')),
+      ]);
+      const users = usersSnap.exists() ? usersSnap.val() || {} : {};
+      const txs = txSnap.exists() ? txSnap.val() || {} : {};
+      const candidates = [];
+      Object.entries(users).forEach(([uid, u]) => {
+        const txId = u?.activeTransaction; if (!txId) return;
+        const t = txs[txId]; const hasSlot = !!(t && t.slot);
+        if (!hasSlot) candidates.push({ uid, txId, name: u.displayName || u.email || uid });
+      });
+      assignSelect.innerHTML = '';
+      if (!candidates.length) {
+        const opt = document.createElement('option'); opt.value=''; opt.textContent='No eligible users'; assignSelect.appendChild(opt);
+      } else {
+        candidates.forEach((c) => { const opt = document.createElement('option'); opt.value = JSON.stringify(c); opt.textContent = `${c.name} [${c.txId.slice(0,6)}]`; assignSelect.appendChild(opt); });
+      }
+      assignOverlay.style.display = 'flex'; assignOverlay.setAttribute('aria-hidden','false');
+
+      const close = ()=>{ assignOverlay.style.display='none'; assignOverlay.setAttribute('aria-hidden','true'); };
+      assignCancel?.addEventListener('click', close, { once:true });
+      assignConfirm?.addEventListener('click', async ()=>{
+        try {
+          const v = assignSelect.value; if (!v) { close(); return; }
+          const chosen = JSON.parse(v);
+          await dbMod.update(dbMod.ref(db, '/transactions/' + chosen.txId), { slot: slotName });
+          const safeKey = slotName.replaceAll('/', '_').replaceAll('.', '_').replaceAll('#','_').replaceAll('[','(').replaceAll(']',')');
+          await dbMod.set(dbMod.ref(db, '/configurations/layout/occupied/' + safeKey), {
+            uid: chosen.uid, txId: chosen.txId, status: 'OCCUPIED', timeIn: new Date().toISOString(), vehicleType: 'CAR', slotName
+          });
+        } catch(_) { alert('Failed to assign.'); }
+        close();
+      }, { once:true });
+    } catch (e) { alert('Failed to open assign modal.'); }
   });
 }
 // Removed details via context menu – now handled by hover

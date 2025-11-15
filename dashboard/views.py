@@ -9,16 +9,22 @@ from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
+from django.contrib.auth import get_user_model
+from django.core.mail import send_mail
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes, force_str
+from django.contrib.auth.tokens import default_token_generator
+from django.urls import reverse
 from accounts.models import CustomUser  # your custom user model
 from django.utils.safestring import mark_safe
 from django.contrib.auth.decorators import user_passes_test
-from core.firebase import rtdb
+from core.firebase import rtdb, init_firebase
 from django.http import JsonResponse
 from datetime import datetime, timedelta, timezone
 import base64, requests
+from firebase_admin import auth as firebase_auth, _auth_utils
 
-# Role-based decorators
-
+# Role-based decorators (must be defined before use)
 def mall_owner_required(view_func):
     return user_passes_test(lambda u: u.is_authenticated and u.is_mall_owner)(view_func)
 
@@ -135,6 +141,69 @@ def login_view(request):
 
     return render(request, "login.html")
 
+def register_view(request):
+    User = get_user_model()
+    if request.method == 'POST':
+        email = (request.POST.get('email') or '').strip()
+        password = (request.POST.get('password') or '').strip()
+        role = (request.POST.get('role') or 'admin').strip()  # 'admin' or 'mall_owner'
+        name = (request.POST.get('name') or '').strip()
+
+        # Basic validations
+        if not email or not password:
+            messages.error(request, 'Email and password are required.')
+            return redirect('register')
+
+        # Strict password: at least 8 chars, upper, lower, special
+        import re
+        if not re.match(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z0-9]).{8,}$', password):
+            messages.error(request, 'Password must be 8+ chars and include uppercase, lowercase, and a special character.')
+            return redirect('register')
+
+        if User.objects.filter(email__iexact=email).exists():
+            messages.error(request, 'An account with this email already exists.')
+            return redirect('register')
+
+        # Create user inactive until email verified
+        username = email  # use email as username for simplicity
+        user = User.objects.create_user(username=username, email=email, password=password)
+        user.first_name = name
+        # Set role flags
+        user.is_admin = (role == 'admin')
+        user.is_mall_owner = (role == 'mall_owner')
+        user.is_user = False
+        user.is_active = False
+        user.save()
+
+        # Send verification email
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        verify_url = request.build_absolute_uri(reverse('verify_email', args=[uidb64, token]))
+        subject = 'Confirm your CYGO admin/mall owner account'
+        message = f'Hello,\n\nPlease confirm your email by clicking the link below:\n{verify_url}\n\nIf you did not request this, you can ignore this email.'
+        try:
+            send_mail(subject, message, None, [email], fail_silently=False)
+        except Exception:
+            # Still allow flow; user can request password reset later
+            pass
+
+        return render(request, 'verify_email_sent.html', {'email': email})
+
+    return render(request, 'register.html')
+
+def verify_email(request, uidb64, token):
+    User = get_user_model()
+    try:
+        uid = force_str(urlsafe_base64_decode(uidb64))
+        user = User.objects.get(pk=uid)
+    except Exception:
+        user = None
+    if user is not None and default_token_generator.check_token(user, token):
+        user.is_active = True
+        user.save()
+        return render(request, 'email_confirm_success.html')
+    return render(request, 'email_confirm_invalid.html', status=400)
+
 def logout_view(request):
     logout(request)
     return redirect('login')  # change this to your login page's name
@@ -236,9 +305,8 @@ def register_slots(request):
             except Exception:
                 # ignore if occupied path does not exist yet
                 pass
-        except Exception:
-            # Silent fail in dev; we will configure env later
-            pass
+        except Exception as e:
+            return JsonResponse({"ok": False, "error": str(e)}, status=500)
 
         return redirect('monitor')
 
@@ -368,10 +436,18 @@ def resolve_incident(request):
         finalize = bool(payload.get('finalize'))
         now_ms = int(time.time()*1000)
         if finalize:
-            db.reference(f"/incidents/{incident_id}").update({
-                "status": "RESOLVED",
-                "resolvedAt": now_ms
-            })
+            # Mark resolved in current incidents
+            inc_ref = db.reference(f"/incidents/{incident_id}")
+            snapshot = inc_ref.get() or {}
+            # Copy to pastIncidents (do not delete from current)
+            try:
+                copy_payload = dict(snapshot) if isinstance(snapshot, dict) else {}
+            except Exception:
+                copy_payload = {}
+            copy_payload.update({"status": "RESOLVED", "resolvedAt": now_ms, "incidentId": incident_id})
+            db.reference(f"/pastIncidents/{incident_id}").set(copy_payload)
+            # Also update current record status
+            inc_ref.update({"status": "RESOLVED", "resolvedAt": now_ms})
         else:
             # Ask user to confirm; auto-resolve after 1 hour
             db.reference(f"/incidents/{incident_id}").update({
@@ -382,6 +458,33 @@ def resolve_incident(request):
         return JsonResponse({"ok": True})
     except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)})
+
+
+@csrf_exempt
+@admin_required
+def delete_firebase_user(request):
+    if request.method != 'POST':
+        return JsonResponse({"error": "POST required"}, status=405)
+    try:
+        import json
+        payload = json.loads(request.body or '{}')
+        uid = payload.get('uid')
+        if not uid:
+            return JsonResponse({"error": "uid required"}, status=400)
+
+        init_firebase()
+        try:
+            firebase_auth.delete_user(uid)
+        except _auth_utils.UserNotFoundError:
+            pass
+        try:
+            rtdb().reference(f"/users/{uid}").delete()
+        except Exception:
+            pass
+
+        return JsonResponse({"ok": True})
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
 
 @mall_owner_required
 def analytics(request):
@@ -442,16 +545,59 @@ def analytics_summary(request):
         # Occupancy
         occ = db.reference('/configurations/layout/occupied').get() or {}
         car_occ = 0; motor_occ = 0; pwd_occ = 0
+        # Capacity (total slots) from layout
+        layout = db.reference('/configurations/layout/slotsByFloor').get() or {}
+        total_car_slots = 0
+        total_motor_slots = 0
+        total_pwd_slots = 0
+        def _add_counts(obj):
+            nonlocal total_car_slots, total_motor_slots, total_pwd_slots
+            try:
+                car = obj.get('Car', [])
+                motor = obj.get('Motorcycle', [])
+                pwd = obj.get('PWD', [])
+                total_car_slots += len(car) if isinstance(car, list) else 0
+                total_motor_slots += len(motor) if isinstance(motor, list) else 0
+                total_pwd_slots += len(pwd) if isinstance(pwd, list) else 0
+            except Exception:
+                pass
+        if isinstance(layout, dict):
+            for item in layout.values():
+                if isinstance(item, dict):
+                    _add_counts(item)
+        elif isinstance(layout, list):
+            for item in layout:
+                if isinstance(item, dict):
+                    _add_counts(item)
+        # Occupancy by user type (PWD vs regular)
+        users_snapshot = db.reference('/users').get() or {}
+        is_pwd_by_uid = {}
+        if isinstance(users_snapshot, dict):
+            for uid, u in users_snapshot.items():
+                if isinstance(u, dict):
+                    try:
+                        is_pwd_by_uid[str(uid)] = bool(u.get('isPWD'))
+                    except Exception:
+                        is_pwd_by_uid[str(uid)] = False
+        occupied_pwd_users = 0; occupied_regular_users = 0
+        total_occupied = 0
         if isinstance(occ, dict):
             for v in occ.values():
                 if not isinstance(v, dict):
                     continue
                 if str(v.get('status','')).upper() != 'OCCUPIED':
                     continue
+                total_occupied += 1
                 vt = str(v.get('vehicleType','')).upper()
                 if vt == 'MOTORCYCLE': motor_occ += 1
                 elif vt == 'PWD': pwd_occ += 1
                 else: car_occ += 1
+                uid = str(v.get('uid') or '')
+                if uid:
+                    if is_pwd_by_uid.get(uid):
+                        occupied_pwd_users += 1
+                    else:
+                        occupied_regular_users += 1
 
         # Transactions snapshot
         txs = db.reference('/transactions').get() or {}
@@ -477,6 +623,9 @@ def analytics_summary(request):
         completed_today = 0; started_today = 0
         stay_mins_sum = 0.0; stay_mins_n = 0
         hist = [0]*24
+        weekly_earnings_by_day = [0.0]*7
+        stay_sum_by_day = [0.0]*7
+        stay_n_by_day = [0]*7
 
         items = txs.items() if isinstance(txs, dict) else enumerate(txs)
         for _, tx in items:
@@ -503,15 +652,25 @@ def analytics_summary(request):
                     completed_today += 1
                 if t_out >= start_week:
                     week_earn += amt_paid
+                    # per-day earnings relative to start_week
+                    day_idx = (t_out.date() - start_week.date()).days
+                    if 0 <= day_idx < 7:
+                        weekly_earnings_by_day[day_idx] += amt_paid
 
             if t_in and t_out:
                 stay = (t_out - t_in).total_seconds()/60.0
                 if stay > 0:
                     stay_mins_sum += stay
                     stay_mins_n += 1
+                    if t_out and t_out >= start_week:
+                        day_idx = (t_out.date() - start_week.date()).days
+                        if 0 <= day_idx < 7:
+                            stay_sum_by_day[day_idx] += stay
+                            stay_n_by_day[day_idx] += 1
 
         avg_stay = round(stay_mins_sum/stay_mins_n, 1) if stay_mins_n else 0.0
         conversion = round((completed_today/max(1, started_today))*100.0, 1)
+        avg_stay_by_day = [ round((stay_sum_by_day[i]/stay_n_by_day[i]), 1) if stay_n_by_day[i] else 0.0 for i in range(7) ]
 
         return JsonResponse({
             'totals': {
@@ -521,13 +680,28 @@ def analytics_summary(request):
                 'yesterdayEntries': yesterday_entries,
                 'conversionTodayPct': conversion,
                 'avgStayMinsWeek': avg_stay,
+                'currentlyOccupied': total_occupied,
             },
             'occupancy': {
                 'car': car_occ,
                 'motorcycle': motor_occ,
                 'pwd': pwd_occ,
+                'capacity': {
+                    'carSlots': total_car_slots,
+                    'motorcycleSlots': total_motor_slots,
+                    'pwdSlots': total_pwd_slots,
+                    'totalSlots': total_car_slots + total_motor_slots + total_pwd_slots,
+                },
+                'byUserType': {
+                    'pwd': occupied_pwd_users,
+                    'regular': occupied_regular_users,
+                }
             },
             'histogramToday': hist,
+            'charts': {
+                'weeklyEarningsByDay': [ round(x,2) for x in weekly_earnings_by_day ],
+                'avgStayMinsByDay': avg_stay_by_day,
+            }
         })
     except Exception as e:
         return JsonResponse({'ok': False, 'error': str(e)}, status=500)
@@ -573,9 +747,30 @@ def entrance_snapshot(request):
         if not (uid and tx_id and cam_url):
             return JsonResponse({"error": "uid, txId, cameraUrl required"}, status=400)
 
-        # 1) Capture JPEG from OV2640 /capture
-        cap_url = cam_url.rstrip('/') + '/capture'
-        cap_res = requests.get(cap_url, timeout=30)
+        # 1) Capture JPEG from OV2640 /capture with cache-buster and plain fallback
+        base_url = cam_url.rstrip('/') + '/capture'
+        def _fetch_ts():
+            try:
+                ts = int(datetime.utcnow().timestamp() * 1000)
+            except Exception:
+                ts = 0
+            return requests.get(f"{base_url}?ts={ts}", timeout=30)
+        def _fetch_plain():
+            return requests.get(base_url, timeout=30)
+
+        # Attempt 1: cache-busted
+        cap_res = _fetch_ts()
+        # Attempt 2: retry ts after a short warm-up if suspicious
+        if cap_res.status_code != 200 or not cap_res.content or len(cap_res.content) < 1024:
+            try:
+                import time as _t
+                _t.sleep(0.25)
+            except Exception:
+                pass
+            cap_res = _fetch_ts()
+        # Attempt 3: compatibility fallback without query
+        if cap_res.status_code != 200 or not cap_res.content or len(cap_res.content) < 1024:
+            cap_res = _fetch_plain()
         if cap_res.status_code != 200 or not cap_res.content:
             return JsonResponse({"ok": False, "error": "capture failed"})
 
@@ -643,6 +838,16 @@ def entrance_snapshot(request):
                 db.reference(f'/transactions/{tx_id}').update({'plateNumber': plate_text, 'plateImageUrl': secure_url})
             else:
                 db.reference(f'/transactions/{tx_id}').update({'plateImageUrl': secure_url})
+            # Retry once after a short delay in case DevKit overwrote the node
+            try:
+                import time as _time
+                _time.sleep(1.2)
+                if plate_text:
+                    db.reference(f'/transactions/{tx_id}').update({'plateNumber': plate_text, 'plateImageUrl': secure_url})
+                else:
+                    db.reference(f'/transactions/{tx_id}').update({'plateImageUrl': secure_url})
+            except Exception:
+                pass
         except Exception as e:
             return JsonResponse({'ok': False, 'error': f'RTDB write failed: {e}', 'url': secure_url})
 

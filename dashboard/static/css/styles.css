@@ -1,9 +1,9 @@
 /* ─── Global ─────────────────────────────────────────────────────────── */
 body {
     margin: 0;
-    font-family: 'Segoe UI', sans-serif;
-    background: #fff292;          /* page background */
-    color: #333;
+    font-family: 'Segoe UI', ui-sans-serif, system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+    background: linear-gradient(180deg, #fff6b7 0%, #fff292 28%, #fff7c7 100%);
+    color: #1d1d1f;
 }
 
 /* ─── Main content area (to the right of the sidebar) ─────────────────── */
@@ -21,25 +21,27 @@ main {
     left: 0;
     width: 220px;
     height: 100vh;
-    background-color: #e8b931;
+    background: linear-gradient(180deg, #e8b931 0%, #f1cc52 100%);
     padding: 1rem;
     display: flex;
     flex-direction: column;
     align-items: center;
+    box-shadow: 0 10px 40px rgba(0,0,0,.12);
 }
 .sidebar .profile { margin-bottom: 2rem; text-align: center; }
-.avatar { width: 80px; height: 80px; border-radius: 50%; margin-bottom: 0.5rem; }
-.username { font-weight: bold; color: #fff; }
+.avatar { width: 84px; height: 84px; border-radius: 50%; margin-bottom: 0.5rem; box-shadow: 0 6px 16px rgba(0,0,0,.18); border: 3px solid rgba(255,255,255,.45); }
+.username { font-weight: 700; color: #fff; letter-spacing: .2px; }
 .nav-link {
     display: block;
-    padding: 0.5rem;
+    padding: 0.6rem .8rem;
     margin: 0.25rem 0;
     color: #fff;
     text-decoration: none;
-    border-radius: 5px;
-    background: rgba(0, 0, 0, 0.10);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.12);
+    transition: transform .12s ease, background .12s ease;
 }
-.nav-link:hover { background: rgba(0, 0, 0, 0.20); }
+.nav-link:hover { background: rgba(0, 0, 0, 0.22); transform: translateY(-1px); }
 
 /* For admin templates we wrap each block content with .container > .card */
 .container {
@@ -48,11 +50,18 @@ main {
 }
 .card, .form-card {
     background: #fff;
-    padding: 1.5rem 2rem;
-    border-radius: 10px;
-    box-shadow: 0 0 10px rgba(0,0,0,0.08);
+    padding: 1.6rem 2rem;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
     margin-top: 1.5rem;
+    border: 1px solid #e6e6e6;
 }
+.card h1, .card h2, .card h3 { margin: 0 0 1rem 0; letter-spacing: .2px; }
+.card h1 { font-size: 1.45rem; }
+.card h2 { font-size: 1.25rem; }
+.card h3 { font-size: 1.1rem; color: #585a5e; }
+.card .section-header{ display:flex; align-items:center; justify-content:space-between; gap:.75rem; margin-bottom:1rem; }
+.card .section-header .tools{ display:flex; gap:.5rem; }
 
 /* ─── Forms & Inputs ─────────────────────────────────────────────────── */
 .form-card label,
@@ -66,20 +75,23 @@ input, textarea, select {
     font-size: 1rem;
     padding: 0.7rem 0.9rem;
     border: 1px solid #ccc;
-    border-radius: 6px;
+    border-radius: 8px;
     margin-bottom: 1rem;
+    background:#fff;
+    transition: box-shadow .15s ease, border-color .15s ease;
 }
+input:focus, textarea:focus, select:focus { outline: none; border-color: #e8b931; box-shadow: 0 0 0 3px rgba(232,185,49,.35); }
 textarea { min-height: 120px; resize: vertical; }
 button {
     width: 100%;
     padding: 0.75rem;
     font-weight: 700;
     border: none;
-    border-radius: 6px;
+    border-radius: 10px;
     background-color: #e8b931;
     color: #000;
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition: background 0.15s ease, transform .08s ease;
 }
 
 button.verify {
@@ -93,20 +105,44 @@ button.decline {
 
 
 button:hover { background-color: #d4a72d; }
+button:active { transform: translateY(1px); }
 
 /* ─── Tables ─────────────────────────────────────────────────────────── */
 table {
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
     margin-top: 1rem;
+    overflow: hidden;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
 }
 th, td {
-    border: 1px solid #ddd;
-    padding: 0.75rem;
+    border-bottom: 1px solid #eee;
+    padding: 0.85rem 0.9rem;
     text-align: left;
 }
-th { background: #f1e087; font-weight: 600; }
-tr:nth-child(even) td { background: #faf9d4; }
+th { background: #f8eaa8; font-weight: 700; color:#2b2b2b; position: sticky; top:0; z-index:1; }
+tr:nth-child(even) td { background: #fffdf0; }
+tr:hover td{ background: #fff8c6; }
+
+/* Priority badges */
+.prio { display:inline-block; padding: .2rem .5rem; border-radius: 999px; font-size: .75rem; font-weight: 700; }
+.prio-high { background:#ffe1e1; color:#b40000; border:1px solid #ffb3b3; }
+.prio-medium { background:#fff1cf; color:#9a6a00; border:1px solid #ffd77a; }
+.prio-low { background:#eaf8e8; color:#1a7f3c; border:1px solid #bfe8c9; }
+
+/* Simple dialog */
+.dialog-mask{ position:fixed; inset:0; background: rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:1500; }
+.dialog{ background:#fff; width: min(480px, 92vw); border-radius:12px; padding:18px; box-shadow:0 20px 60px rgba(0,0,0,.25); }
+.dialog h3{ margin:0 0 8px; }
+.dialog p{ margin:0 0 14px; color:#555; }
+.dialog-actions{ display:flex; justify-content:flex-end; gap:10px; }
+.btn-primary{ background:#e8b931; border:none; padding:10px 14px; border-radius:8px; cursor:pointer; }
+.btn-secondary{ background:#eee; border:none; padding:10px 14px; border-radius:8px; cursor:pointer; }
+
+/* Table polish */
+table tbody tr:hover td{ background:#fff8c6; }
 
 /* ─── Login Page ─────────────────────────────────────────────────────── */
 .login-page {
@@ -114,13 +150,13 @@ tr:nth-child(even) td { background: #faf9d4; }
     justify-content: center;
     align-items: center;
     height: 100vh;
-    background: #fff292;
+    background: linear-gradient(180deg, #fff6b7 0%, #fff292 100%);
 }
 .login-box {
     background: #fff;
     padding: 2rem 2.5rem;
-    border-radius: 12px;
-    box-shadow: 0 0 15px rgba(0,0,0,0.10);
+    border-radius: 16px;
+    box-shadow: 0 16px 50px rgba(0,0,0,0.12);
     width: 320px;
 }
 .login-box h2 {

@@ -5,20 +5,47 @@
 <div class="container">
   <div class="card">
     <h1>Incident Reports</h1>
-    <table>
-      <thead>
-        <tr>
-          <th>Image</th>
-          <th>Description</th>
-          <th>Reported By</th>
-          <th>Timestamp</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody id="incidentsBody">
-        <tr><td colspan="5" style="text-align:center;color:#777;">Loading…</td></tr>
-      </tbody>
-    </table>
+    <!-- Tabs -->
+    <div style="display:flex; gap:.5rem; margin:.5rem 0 1rem;">
+      <button id="tabBtnCurrent" class="btn" style="background:#e6f0ff; color:#103d85;">Current Reports</button>
+      <button id="tabBtnPast" class="btn" style="background:#f3f3f3; color:#333;">Past Reports</button>
+    </div>
+    <!-- Current -->
+    <div id="tabCurrent">
+      <table>
+        <thead>
+          <tr>
+            <th>Image</th>
+            <th>Description</th>
+            <th>Priority</th>
+            <th>Reported By</th>
+            <th>Timestamp</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="incidentsBody">
+          <tr><td colspan="6" style="text-align:center;color:#777;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <!-- Past -->
+    <div id="tabPast" style="display:none;">
+      <table>
+        <thead>
+          <tr>
+            <th>Image</th>
+            <th>Description</th>
+            <th>Priority</th>
+            <th>Reported By</th>
+            <th>Reported At</th>
+            <th>Resolved At</th>
+          </tr>
+        </thead>
+        <tbody id="pastIncidentsBody">
+          <tr><td colspan="6" style="text-align:center;color:#777;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
     <!-- Image overlay viewer -->
     <div id="imgOverlay" class="overlay" aria-hidden="true">
       <img id="imgFull" class="modal-image" alt="Incident image" />

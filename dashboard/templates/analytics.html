@@ -4,83 +4,188 @@
 {% block content %}
 <div class="container">
   <div class="card">
-    <div style="display:flex; gap:1rem; padding: 1rem; flex-wrap: wrap;">
-      <div class="card" style="flex:1; text-align:center; min-width: 220px;">
-        <h3>Today's Earnings</h3>
-        <p id="kpi-today" style="font-size: 1.6rem; font-weight: bold;">₱0.00</p>
+    <!-- KPI Row (simplified; removed Entries Today and Currently Occupied) -->
+    <div style="display:flex; gap: 1rem; padding: 1rem; flex-wrap: wrap;">
+      <div class="card" style="flex:1; min-width:200px; text-align:center;">
+        <h3>Registered Users</h3>
+        <p id="kpi-registered" style="font-size: 1.5rem; font-weight: bold;">{{ registered_users_count }}</p>
       </div>
-      <div class="card" style="flex:1; text-align:center; min-width: 220px;">
-        <h3>This Week</h3>
-        <p id="kpi-week" style="font-size: 1.6rem; font-weight: bold;">₱0.00</p>
+      <div class="card" style="flex:1; min-width:200px; text-align:center;">
+        <h3>Today Earnings</h3>
+        <p id="kpi-earn-today" style="font-size: 1.5rem; font-weight: bold;">₱0.00</p>
       </div>
-      <div class="card" style="flex:1; text-align:center; min-width: 220px;">
-        <h3>Entries (Today / Yesterday)</h3>
-        <p id="kpi-entries" style="font-size: 1.2rem; font-weight: bold;">0 / 0</p>
-      </div>
-      <div class="card" style="flex:1; text-align:center; min-width: 220px;">
-        <h3>Conversion Today</h3>
-        <p id="kpi-conversion" style="font-size: 1.6rem; font-weight: bold;">0%</p>
-      </div>
-      <div class="card" style="flex:1; text-align:center; min-width: 220px;">
-        <h3>Avg Stay (mins, week)</h3>
-        <p id="kpi-avgstay" style="font-size: 1.6rem; font-weight: bold;">0.0</p>
+      <div class="card" style="flex:1; min-width:200px; text-align:center;">
+        <h3>Entries Yesterday</h3>
+        <p id="kpi-entries-yest" style="font-size: 1.5rem; font-weight: bold;">0</p>
       </div>
     </div>
 
-    <div style="display:flex; gap:1rem; padding: 0 1rem 1rem; flex-wrap: wrap;">
-      <div class="card" style="flex:1; min-width: 320px; padding: 1rem;">
-        <h3>Occupancy (live)</h3>
-        <canvas id="chartOcc" height="120"></canvas>
+    <!-- Weekly Earnings + Avg Stay (each chart scrolls individually; forced side-by-side) -->
+    <div style="display:flex; gap:1rem; padding: 0 1rem 1rem; flex-wrap: nowrap; align-items: stretch;">
+      <div class="card chart-card" style="flex:1 1 0; min-width:0;">
+        <div class="chart-title">Weekly Earnings</div>
+        <div class="chart-scroll"><div style="min-width:900px;"><canvas id="earningsWeekly" width="900" height="260"></canvas></div></div>
       </div>
-      <div class="card" style="flex:2; min-width: 420px; padding: 1rem;">
-        <h3>Entries per Hour (Today)</h3>
-        <canvas id="chartHist" height="120"></canvas>
+      <div class="card chart-card" style="flex:1 1 0; min-width:0;">
+        <div class="chart-title">Avg Stay (mins) by Day</div>
+        <div class="chart-scroll"><div style="min-width:900px;"><canvas id="avgStayWeekly" width="900" height="260"></canvas></div></div>
+      </div>
+    </div>
+
+    <!-- Pie + Hourly side-by-side (compact) -->
+    <div style="display:flex; gap:1rem; padding: 0 1rem 1rem; flex-wrap: wrap; align-items: stretch;">
+      <div class="card" style="flex:0 1 420px; max-width:480px;">
+        <div class="chart-title">Current Occupancy</div>
+        <div style="position:relative; display:flex; flex-direction:column; align-items:center; gap:.75rem;">
+          <canvas id="occProgress" style="max-height:240px;"></canvas>
+          <div id="occLegend" style="font-size:.9rem;"></div>
+        </div>
+      </div>
+      <div class="card chart-card" style="flex:1 1 520px; min-width:360px;">
+        <div class="chart-title">Entries Today (hourly)</div>
+        <div class="chart-scroll"><div style="min-width:900px;"><canvas id="entriesHourly" width="900" height="260"></canvas></div></div>
       </div>
     </div>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script>
-  let chartOcc, chartHist;
-  async function loadSummary(){
-    try{
-      const res = await fetch('/api/analytics/summary', {cache: 'no-store'});
-      if(!res.ok){ return; }
-      const data = await res.json();
-      const t = data.totals || {}; const o = data.occupancy || {}; const h = data.histogramToday || [];
-      document.getElementById('kpi-today').textContent = '₱' + (Number(t.todayEarnings||0)).toFixed(2);
-      document.getElementById('kpi-week').textContent = '₱' + (Number(t.weekEarnings||0)).toFixed(2);
-      document.getElementById('kpi-entries').textContent = (t.todayEntries||0) + ' / ' + (t.yesterdayEntries||0);
-      document.getElementById('kpi-conversion').textContent = (Number(t.conversionTodayPct||0)).toFixed(1) + '%';
-      document.getElementById('kpi-avgstay').textContent = (Number(t.avgStayMinsWeek||0)).toFixed(1);
-
-      const occLabels = ['Car','Motorcycle','PWD'];
-      const occData = [Number(o.car||0), Number(o.motorcycle||0), Number(o.pwd||0)];
-      if(!chartOcc){
-        chartOcc = new Chart(document.getElementById('chartOcc'), {
-          type: 'doughnut',
-          data: { labels: occLabels, datasets: [{ data: occData, backgroundColor:['#ffd54f','#90caf9','#a5d6a7'] }] },
-          options: { responsive:true, plugins:{ legend:{ position:'bottom' } } }
-        });
-      } else {
-        chartOcc.data.datasets[0].data = occData; chartOcc.update('none');
-      }
-
-      const hours = Array.from({length:24}, (_,i)=> (i<10?'0':'')+i+':00');
-      const hist = (h.length===24)? h : Array(24).fill(0);
-      if(!chartHist){
-        chartHist = new Chart(document.getElementById('chartHist'), {
-          type: 'bar',
-          data: { labels: hours, datasets: [{ label:'Entries', data: hist, backgroundColor:'#ffe082' }] },
-          options: { responsive:true, scales:{ x:{ ticks:{ maxRotation:0, autoSkip:true } }, y:{ beginAtZero:true } } }
-        });
-      } else {
-        chartHist.data.datasets[0].data = hist; chartHist.update('none');
-      }
-    }catch(_){ }
+<script type="module">
+  async function fetchSummary(){
+    const res = await fetch("{% url 'analytics_summary' %}");
+    if (!res.ok) return null;
+    return await res.json();
   }
-  loadSummary();
-  setInterval(loadSummary, 15000);
+
+  const fmtPeso = (v)=> '₱' + Number(v||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+  const hours = Array.from({length:24}, (_,i)=> i.toString().padStart(2,'0'));
+  const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+  const occProgressCtx = document.getElementById('occProgress');
+  const occLegend = document.getElementById('occLegend');
+  const hourlyCtx = document.getElementById('entriesHourly');
+  const earningsWeeklyCtx = document.getElementById('earningsWeekly');
+  const avgStayWeeklyCtx = document.getElementById('avgStayWeekly');
+
+  const centerTextPlugin = {
+    id: 'centerText',
+    beforeDraw(chart) {
+      if (!chart._occupancyText) return;
+      const {ctx, chartArea: {width, height}} = chart;
+      const lines = chart._occupancyText.lines || [];
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#333';
+      ctx.font = '600 20px sans-serif';
+      lines.forEach((line, idx)=>{
+        ctx.fillText(line, width / 2, height / 2 + idx * 22);
+      });
+      ctx.restore();
+    }
+  };
+
+  const occProgressChart = new Chart(occProgressCtx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Occupied','Available'],
+      datasets: [{
+        data: [0, 1],
+        backgroundColor:['#f4c430','#e0e0e0'],
+        borderWidth:0,
+        hoverOffset:4
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '70%',
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx)=> `${ctx.label}: ${ctx.parsed} slots` } }
+      }
+    },
+    plugins: [centerTextPlugin]
+  });
+  occProgressChart._occupancyText = { lines: ['0/0', '0%'] };
+
+  const hourlyChart = new Chart(hourlyCtx, {
+    type: 'bar',
+    data: { labels: hours, datasets: [{ label: 'Entries', data: Array(24).fill(0), backgroundColor: '#f4c430' }] },
+    options: { responsive: false, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+  });
+
+  const earningsWeeklyChart = new Chart(earningsWeeklyCtx, {
+    type: 'line',
+    data: { labels: days, datasets: [{ label: 'Earnings', data: Array(7).fill(0), borderColor: '#673ab7', backgroundColor: 'rgba(103,58,183,0.2)', tension: 0.35, fill: true, pointRadius: 3 }] },
+    options: { responsive: false, maintainAspectRatio: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: 'bottom' }, tooltip: { callbacks: { label: (ctx)=> fmtPeso(ctx.parsed.y) } } } }
+  });
+
+  const avgStayWeeklyChart = new Chart(avgStayWeeklyCtx, {
+    type: 'line',
+    data: { labels: days, datasets: [{ label: 'Avg Stay (mins)', data: Array(7).fill(0), borderColor: '#009688', backgroundColor: 'rgba(0,150,136,0.2)', tension: 0.35, fill: true, pointRadius: 3 }] },
+    options: { responsive: false, maintainAspectRatio: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: 'bottom' } } }
+  });
+
+  async function refresh(){
+    const js = await fetchSummary(); if (!js) return;
+    const t = js.totals || {}; const o = js.occupancy || {}; const h = js.histogramToday || [];
+    const ch = js.charts || {};
+
+    const earnTodayEl = document.getElementById('kpi-earn-today');
+    if (earnTodayEl) earnTodayEl.innerText = fmtPeso(t.todayEarnings||0);
+    const yestEl = document.getElementById('kpi-entries-yest');
+    if (yestEl) yestEl.innerText = (t.yesterdayEntries||0);
+
+    const totalOccupied = t.currentlyOccupied || 0;
+    const capacityInfo = (o.capacity || {});
+    const totalSlots = Math.max(capacityInfo.totalSlots || 0, totalOccupied);
+    const availableSlots = Math.max(totalSlots - totalOccupied, 0);
+    const occupiedEl = document.getElementById('kpi-occupied');
+    if (occupiedEl) occupiedEl.innerText = totalOccupied;
+
+    occProgressChart.data.datasets[0].data = [
+      totalOccupied,
+      availableSlots > 0 ? availableSlots : 0.0001
+    ];
+    const percent = totalSlots > 0 ? Math.round((totalOccupied / totalSlots) * 100) : 0;
+    occProgressChart._occupancyText = { lines: [`${totalOccupied}/${totalSlots}`, `${percent}%`] };
+    occProgressChart.update();
+    if (occLegend) {
+      occLegend.innerHTML = `
+        <div class="occ-legend-row">
+          <span><span class="occ-dot occ-car"></span>Car: ${o.car || 0} / ${capacityInfo.carSlots || 0}</span>
+          <span><span class="occ-dot occ-motor"></span>Motorcycle: ${o.motorcycle || 0} / ${capacityInfo.motorcycleSlots || 0}</span>
+          <span><span class="occ-dot occ-pwd"></span>PWD: ${o.pwd || 0} / ${capacityInfo.pwdSlots || 0}</span>
+        </div>`;
+    }
+
+    // Update hourly entries chart
+    hourlyChart.data.datasets[0].data = (Array.isArray(h) ? h : Array(24).fill(0));
+    hourlyChart.update();
+
+    // Weekly earnings line
+    const earnArr = Array.isArray(ch.weeklyEarningsByDay) ? ch.weeklyEarningsByDay : Array(7).fill(0);
+    earningsWeeklyChart.data.datasets[0].data = earnArr;
+    earningsWeeklyChart.update();
+
+    // Avg stay line
+    const stayArr = Array.isArray(ch.avgStayMinsByDay) ? ch.avgStayMinsByDay : Array(7).fill(0);
+    avgStayWeeklyChart.data.datasets[0].data = stayArr;
+    avgStayWeeklyChart.update();
+  }
+
+  await refresh();
+  setInterval(refresh, 15000);
 </script>
+<style>
+  .chart-card{ position: relative; }
+  .chart-title{ position: sticky; top: 0; text-align: center; font-weight: 700; padding: 8px 0; background: #fff; z-index: 2; }
+  .chart-scroll{ overflow-x: auto; }
+  .occ-legend-row{ display:flex; flex-wrap:wrap; gap:12px; justify-content:center; font-size:.9rem; }
+  .occ-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; }
+  .occ-car{ background:#f4c430; }
+  .occ-motor{ background:#4caf50; }
+  .occ-pwd{ background:#2196f3; }
+</style>
 {% endblock %}

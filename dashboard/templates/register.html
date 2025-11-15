@@ -1,0 +1,31 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head><link rel="stylesheet" href="{% static 'css/styles.css' %}"></head>
+<body class="login-page">
+  <div class="login-box">
+    <h2>Create Account</h2>
+    {% for msg in messages %}<p style="color:red;">{{ msg }}</p>{% endfor %}
+    <form method="post">{% csrf_token %}
+      <label>Full Name <input type="text" name="name" required></label>
+      <label>Email <input type="email" name="email" required></label>
+      <label>Password <input type="password" name="password" required placeholder="8+ chars, upper/lower/special"></label>
+      <label>Role
+        <select name="role" required>
+          <option value="admin">Admin</option>
+          <option value="mall_owner">Mall Owner</option>
+        </select>
+      </label>
+      <button type="submit">Register</button>
+    </form>
+    <p style="text-align:center;margin-top:1rem; font-size: 0.9rem; color:#666;">
+      A verification email will be sent. You must confirm before login.
+    </p>
+    <div style="text-align:center; margin-top:.5rem;">
+      <a href="{% url 'login' %}">Back to Login</a>
+    </div>
+  </div>
+</body>
+</html>
+
+
