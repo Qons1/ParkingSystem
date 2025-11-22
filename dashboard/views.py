@@ -23,6 +23,10 @@ from django.http import JsonResponse
 from datetime import datetime, timedelta, timezone
 import base64, requests
 from firebase_admin import auth as firebase_auth, _auth_utils
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python <3.9 fallback
+    ZoneInfo = None
 
 # Role-based decorators (must be defined before use)
 def mall_owner_required(view_func):
@@ -35,6 +39,18 @@ def admin_only_required(view_func):
     return user_passes_test(lambda u: u.is_authenticated and u.is_admin)(view_func)
 
 report_entries = []
+
+
+def _encode_ban_key(raw: str) -> str:
+    """
+    Convert emails or other identifiers to a Firebase RTDB-safe key using base64url (no padding).
+    Falls back to a simple sanitized string if encoding fails.
+    """
+    try:
+        encoded = base64.urlsafe_b64encode(raw.strip().lower().encode("utf-8")).decode("ascii")
+        return encoded.rstrip("=")
+    except Exception:
+        return raw.strip().lower().replace(".", "_").replace("@", "_at_")
 
 # ───────────────────────────────────────────────────────────────
 #  Dynamic graph view
@@ -164,8 +180,13 @@ def register_view(request):
             messages.error(request, 'An account with this email already exists.')
             return redirect('register')
 
+        # Check if username already exists
+        if User.objects.filter(username__iexact=name).exists():
+            messages.error(request, 'An account with this username already exists.')
+            return redirect('register')
+
         # Create user inactive until email verified
-        username = email  # use email as username for simplicity
+        username = name  # use the name field as username
         user = User.objects.create_user(username=username, email=email, password=password)
         user.first_name = name
         # Set role flags
@@ -386,7 +407,7 @@ def save_layout_labels(request):
 # ───────────────────────────────────────────────────────────────
 
 @csrf_exempt
-@admin_required
+@admin_only_required
 def approve_pwd(request):
     if request.method != 'POST':
         return JsonResponse({"error": "POST required"}, status=405)
@@ -404,7 +425,7 @@ def approve_pwd(request):
         return JsonResponse({"ok": False, "error": str(e)})
 
 @csrf_exempt
-@admin_required
+@admin_only_required
 def decline_pwd(request):
     if request.method != 'POST':
         return JsonResponse({"error": "POST required"}, status=405)
@@ -486,6 +507,82 @@ def delete_firebase_user(request):
     except Exception as e:
         return JsonResponse({"ok": False, "error": str(e)}, status=500)
 
+
+@csrf_exempt
+@admin_required
+def ban_user(request):
+    if request.method != 'POST':
+        return JsonResponse({"error": "POST required"}, status=405)
+    try:
+        import json
+        import time as _time
+
+        payload = json.loads(request.body or '{}')
+        uid = (payload.get('uid') or '').strip()
+        reason = (payload.get('reason') or '').strip()
+        if not uid:
+            return JsonResponse({"error": "uid required"}, status=400)
+
+        init_firebase()
+        db = rtdb()
+
+        user_snapshot = db.reference(f'/users/{uid}').get() or {}
+        email = (user_snapshot.get('email') or '').strip()
+        contact = (user_snapshot.get('contactNumber') or '').strip()
+        display_name = (user_snapshot.get('displayName') or '').strip()
+        now_ms = int(_time.time() * 1000)
+        banned_by = getattr(request.user, 'email', '') or getattr(request.user, 'username', '') or 'admin'
+        ban_reason = reason or 'No reason provided'
+
+        ban_payload = {
+            'uid': uid,
+            'email': email.lower(),
+            'contactNumber': contact,
+            'displayName': display_name,
+            'reason': ban_reason,
+            'bannedAt': now_ms,
+            'bannedAtIso': datetime.utcfromtimestamp(now_ms / 1000.0).isoformat() + 'Z',
+            'bannedBy': banned_by,
+        }
+
+        db.reference(f'/banned/users/{uid}').set(ban_payload)
+
+        index_payload = {
+            'uid': uid,
+            'reason': ban_reason,
+            'bannedAt': now_ms,
+            'bannedBy': banned_by,
+        }
+        if email:
+            email_key = _encode_ban_key(email)
+            db.reference(f'/banned/index/email/{email_key}').set({
+                **index_payload,
+                'email': email.lower(),
+                'contactNumber': contact,
+            })
+        if contact:
+            db.reference(f'/banned/index/contact/{contact}').set({
+                **index_payload,
+                'email': email.lower(),
+                'contactNumber': contact,
+            })
+
+        try:
+            db.reference(f'/users/{uid}').delete()
+        except Exception:
+            pass
+
+        try:
+            firebase_auth.delete_user(uid)
+        except _auth_utils.UserNotFoundError:
+            pass
+        except Exception as exc:
+            return JsonResponse({"ok": False, "error": f"Firebase Auth delete failed: {exc}"}, status=500)
+
+        return JsonResponse({"ok": True, "ban": ban_payload})
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
 @mall_owner_required
 def analytics(request):
     """Mall owner analytics: show registered users count and weekly entries.
@@ -531,6 +628,22 @@ def analytics(request):
     return render(request, "analytics.html", {
         "registered_users_count": registered_users_count,
         "weekly_entries_count": weekly_entries_count,
+    })
+
+@login_required
+@admin_required
+def report_builder(request):
+    generator_name = (
+        request.user.get_full_name()
+        or request.user.first_name
+        or request.user.username
+        or request.user.email
+        or "Administrator"
+    )
+    generator_email = getattr(request.user, "email", "") or ""
+    return render(request, "report_builder.html", {
+        "generator_name": generator_name,
+        "generator_email": generator_email,
     })
 
 # ───────────────────────────────────────────────────────────────
@@ -604,10 +717,17 @@ def analytics_summary(request):
         if not isinstance(txs, (dict, list)):
             txs = {}
 
-        now = datetime.now(timezone.utc)
-        start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        try:
+            tz_ph = ZoneInfo("Asia/Manila")
+        except Exception:
+            tz_ph = timezone(timedelta(hours=8))
+        now_utc = datetime.now(timezone.utc)
+        now_ph = now_utc.astimezone(tz_ph)
+        start_today_ph = now_ph.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_today = start_today_ph.astimezone(timezone.utc)
         start_yesterday = (start_today - timedelta(days=1))
-        start_week = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_week_ph = (now_ph - timedelta(days=now_ph.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_week = start_week_ph.astimezone(timezone.utc)
 
         def to_dt(val):
             # timeIn/Out can be ISO string; sometimes ms epoch in older data
@@ -627,6 +747,58 @@ def analytics_summary(request):
         stay_sum_by_day = [0.0]*7
         stay_n_by_day = [0]*7
 
+        days_back = 6
+        day_ranges = []
+        day_index_map = {}
+        for offset in range(days_back, -1, -1):
+            day_start_ph = start_today_ph - timedelta(days=offset)
+            day_label = day_start_ph.strftime('%d %b %Y')
+            day_ranges.append((day_label, day_start_ph))
+            day_index_map[(day_start_ph.year, day_start_ph.month, day_start_ph.day)] = len(day_ranges) - 1
+        daily_total = [0.0] * len(day_ranges)
+        daily_car = [0.0] * len(day_ranges)
+        daily_motor = [0.0] * len(day_ranges)
+        daily_transactions = [0] * len(day_ranges)
+        daily_stay_sum = [0.0] * len(day_ranges)
+        daily_stay_n = [0] * len(day_ranges)
+
+        weeks_back = 7
+        week_ranges = []
+        week_index_map = {}
+        for offset in range(weeks_back, -1, -1):
+            week_start_ph = start_week_ph - timedelta(days=offset * 7)
+            week_end_ph = week_start_ph + timedelta(days=6)
+            week_label = f"Week of {week_start_ph.strftime('%d %b')} – {week_end_ph.strftime('%d %b %Y')}"
+            iso_key = week_start_ph.isocalendar()
+            week_ranges.append((week_label, week_start_ph))
+            week_index_map[(iso_key[0], iso_key[1])] = len(week_ranges) - 1
+        weekly_total_array = [0.0] * len(week_ranges)
+        weekly_car_array = [0.0] * len(week_ranges)
+        weekly_motor_array = [0.0] * len(week_ranges)
+        weekly_transactions = [0] * len(week_ranges)
+        weekly_stay_sum = [0.0] * len(week_ranges)
+        weekly_stay_n = [0] * len(week_ranges)
+
+        def _shift_month(dt, offset):
+            year = dt.year + ((dt.month - 1 + offset) // 12)
+            month = (dt.month - 1 + offset) % 12 + 1
+            return dt.replace(year=year, month=month)
+
+        start_of_month_ph = now_ph.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_ranges = []
+        month_index_map = {}
+        for offset in range(-5, 1):
+            start = _shift_month(start_of_month_ph, offset)
+            label = start.strftime('%b %Y')
+            month_ranges.append((label, start))
+            month_index_map[(start.year, start.month)] = len(month_ranges) - 1
+        monthly_total = [0.0] * len(month_ranges)
+        monthly_car = [0.0] * len(month_ranges)
+        monthly_motor = [0.0] * len(month_ranges)
+        monthly_transactions = [0] * len(month_ranges)
+        monthly_stay_sum = [0.0] * len(month_ranges)
+        monthly_stay_n = [0] * len(month_ranges)
+
         items = txs.items() if isinstance(txs, dict) else enumerate(txs)
         for _, tx in items:
             if not isinstance(tx, dict):
@@ -635,6 +807,8 @@ def analytics_summary(request):
             t_out = to_dt(tx.get('timeOut'))
             status = str(tx.get('status','')).upper()
             amt_paid = float(tx.get('amountPaid') or 0)
+            vehicle_type = str(tx.get('vehicleType', '')).upper()
+            stay_minutes = None
 
             if t_in:
                 if t_in >= start_today:
@@ -646,7 +820,20 @@ def analytics_summary(request):
                 elif start_yesterday <= t_in < start_today:
                     yesterday_entries += 1
 
+            if t_in and t_out:
+                stay = (t_out - t_in).total_seconds()/60.0
+                if stay > 0:
+                    stay_minutes = stay
+                    stay_mins_sum += stay
+                    stay_mins_n += 1
+                    if t_out and t_out >= start_week:
+                        day_idx = (t_out.date() - start_week.date()).days
+                        if 0 <= day_idx < 7:
+                            stay_sum_by_day[day_idx] += stay
+                            stay_n_by_day[day_idx] += 1
+
             if t_out:
+                t_out_ph = t_out.astimezone(tz_ph)
                 if t_out >= start_today:
                     today_earn += amt_paid
                     completed_today += 1
@@ -656,21 +843,69 @@ def analytics_summary(request):
                     day_idx = (t_out.date() - start_week.date()).days
                     if 0 <= day_idx < 7:
                         weekly_earnings_by_day[day_idx] += amt_paid
+                month_key = (t_out_ph.year, t_out_ph.month)
+                idx = month_index_map.get(month_key)
+                if idx is not None:
+                    monthly_total[idx] += amt_paid
+                    if vehicle_type == 'MOTORCYCLE':
+                        monthly_motor[idx] += amt_paid
+                    else:
+                        monthly_car[idx] += amt_paid
+                    monthly_transactions[idx] += 1
+                    if stay_minutes is not None and stay_minutes > 0:
+                        monthly_stay_sum[idx] += stay_minutes
+                        monthly_stay_n[idx] += 1
 
-            if t_in and t_out:
-                stay = (t_out - t_in).total_seconds()/60.0
-                if stay > 0:
-                    stay_mins_sum += stay
-                    stay_mins_n += 1
-                    if t_out and t_out >= start_week:
-                        day_idx = (t_out.date() - start_week.date()).days
-                        if 0 <= day_idx < 7:
-                            stay_sum_by_day[day_idx] += stay
-                            stay_n_by_day[day_idx] += 1
+                day_key = (t_out_ph.year, t_out_ph.month, t_out_ph.day)
+                day_idx_custom = day_index_map.get(day_key)
+                if day_idx_custom is not None:
+                    daily_total[day_idx_custom] += amt_paid
+                    if vehicle_type == 'MOTORCYCLE':
+                        daily_motor[day_idx_custom] += amt_paid
+                    else:
+                        daily_car[day_idx_custom] += amt_paid
+                    daily_transactions[day_idx_custom] += 1
+                    if stay_minutes is not None and stay_minutes > 0:
+                        daily_stay_sum[day_idx_custom] += stay_minutes
+                        daily_stay_n[day_idx_custom] += 1
+
+                week_start_tx = (t_out_ph - timedelta(days=t_out_ph.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+                iso_tx = week_start_tx.isocalendar()
+                week_idx_custom = week_index_map.get((iso_tx[0], iso_tx[1]))
+                if week_idx_custom is not None:
+                    weekly_total_array[week_idx_custom] += amt_paid
+                    if vehicle_type == 'MOTORCYCLE':
+                        weekly_motor_array[week_idx_custom] += amt_paid
+                    else:
+                        weekly_car_array[week_idx_custom] += amt_paid
+                    weekly_transactions[week_idx_custom] += 1
+                    if stay_minutes is not None and stay_minutes > 0:
+                        weekly_stay_sum[week_idx_custom] += stay_minutes
+                        weekly_stay_n[week_idx_custom] += 1
 
         avg_stay = round(stay_mins_sum/stay_mins_n, 1) if stay_mins_n else 0.0
         conversion = round((completed_today/max(1, started_today))*100.0, 1)
         avg_stay_by_day = [ round((stay_sum_by_day[i]/stay_n_by_day[i]), 1) if stay_n_by_day[i] else 0.0 for i in range(7) ]
+
+        month_labels = [label for label, _ in month_ranges]
+        monthly_total = [round(x, 2) for x in monthly_total]
+        monthly_car = [round(x, 2) for x in monthly_car]
+        monthly_motor = [round(x, 2) for x in monthly_motor]
+        monthly_avg_stay = [round((monthly_stay_sum[i]/monthly_stay_n[i]), 1) if monthly_stay_n[i] else 0.0 for i in range(len(month_ranges))]
+        daily_labels = [label for label, _ in day_ranges]
+        weekly_labels = [label for label, _ in week_ranges]
+        daily_total = [round(x, 2) for x in daily_total]
+        daily_car = [round(x, 2) for x in daily_car]
+        daily_motor = [round(x, 2) for x in daily_motor]
+        weekly_total_array = [round(x, 2) for x in weekly_total_array]
+        weekly_car_array = [round(x, 2) for x in weekly_car_array]
+        weekly_motor_array = [round(x, 2) for x in weekly_motor_array]
+        daily_avg_stay = [round((daily_stay_sum[i]/daily_stay_n[i]), 1) if daily_stay_n[i] else 0.0 for i in range(len(daily_stay_n))]
+        weekly_avg_stay = [round((weekly_stay_sum[i]/weekly_stay_n[i]), 1) if weekly_stay_n[i] else 0.0 for i in range(len(weekly_stay_n))]
+        current_total = monthly_total[-1] if monthly_total else 0.0
+        previous_total = monthly_total[-2] if len(monthly_total) > 1 else 0.0
+        current_label = month_labels[-1] if month_labels else ''
+        previous_label = month_labels[-2] if len(month_labels) > 1 else ''
 
         return JsonResponse({
             'totals': {
@@ -699,7 +934,37 @@ def analytics_summary(request):
             },
             'histogramToday': hist,
             'charts': {
-                'weeklyEarningsByDay': [ round(x,2) for x in weekly_earnings_by_day ],
+                'monthlyEarnings': {
+                    'labels': month_labels,
+                    'total': monthly_total,
+                    'car': monthly_car,
+                    'motorcycle': monthly_motor,
+                    'transactions': monthly_transactions,
+                    'avgStay': monthly_avg_stay,
+                },
+                'weeklyEarnings': {
+                    'labels': weekly_labels,
+                    'total': weekly_total_array,
+                    'car': weekly_car_array,
+                    'motorcycle': weekly_motor_array,
+                    'transactions': weekly_transactions,
+                    'avgStay': weekly_avg_stay,
+                },
+                'dailyEarnings': {
+                    'labels': daily_labels,
+                    'total': daily_total,
+                    'car': daily_car,
+                    'motorcycle': daily_motor,
+                    'transactions': daily_transactions,
+                    'avgStay': daily_avg_stay,
+                },
+                'monthlyComparison': {
+                    'currentLabel': current_label,
+                    'previousLabel': previous_label,
+                    'currentTotal': round(current_total, 2),
+                    'previousTotal': round(previous_total, 2),
+                    'difference': round(current_total - previous_total, 2),
+                },
                 'avgStayMinsByDay': avg_stay_by_day,
             }
         })
@@ -708,12 +973,12 @@ def analytics_summary(request):
 
     
 @login_required
-@admin_required
+@admin_only_required
 def pending(request):
     return render(request, 'pending.html')
 
 @login_required
-@admin_required
+@admin_only_required
 def reports(request):
     return render(request, 'reports.html', {"reports": report_entries})
 
@@ -723,7 +988,7 @@ def database(request):
     users = CustomUser.objects.filter(is_user=True)
     return render(request, 'database.html', {"users": users})
 @login_required
-@admin_required
+@admin_only_required
 def verify_pwd(request):
      return render(request, "verify_pwd.html")
 
@@ -851,6 +1116,51 @@ def entrance_snapshot(request):
         except Exception as e:
             return JsonResponse({'ok': False, 'error': f'RTDB write failed: {e}', 'url': secure_url})
 
+        # 4b) Establish closing deadline + notification schedule (Mall hours: 10:00–21:00 Asia/Manila)
+        try:
+            if uid:
+                try:
+                    tz_ph = ZoneInfo("Asia/Manila") if ZoneInfo else timezone(timedelta(hours=8))
+                except Exception:
+                    tz_ph = timezone(timedelta(hours=8))
+                now_ph = datetime.now(tz_ph)
+                closing_ph = now_ph.replace(hour=21, minute=0, second=0, microsecond=0)
+                if now_ph >= closing_ph:
+                    closing_ph = closing_ph + timedelta(days=1)
+                deadline_ms = int(closing_ph.timestamp() * 1000)
+                now_ms = int(now_ph.timestamp() * 1000)
+                thresholds = {}
+                for minutes in (60, 30, 15, 5):
+                    notify_at = deadline_ms - minutes * 60 * 1000
+                    status = 'scheduled'
+                    if notify_at <= now_ms:
+                        status = 'due'
+                    thresholds[str(minutes)] = {
+                        'notifyAt': notify_at,
+                        'status': status,
+                    }
+                closing_info = {
+                    'txId': tx_id,
+                    'deadline': deadline_ms,
+                    'deadlineIso': closing_ph.isoformat(),
+                    'setAt': now_ms,
+                    'thresholds': thresholds,
+                    'timezone': 'Asia/Manila',
+                    'mallOpenHour': 10,
+                    'mallCloseHour': 21,
+                }
+                try:
+                    db.reference(f'/transactions/{tx_id}').update({'closingDeadline': deadline_ms})
+                except Exception:
+                    pass
+                try:
+                    db.reference(f'/users/{uid}/closingInfo').set(closing_info)
+                except Exception:
+                    pass
+        except Exception:
+            # Silent failure – closing info is advisory and should not break the flow
+            pass
+
         # Read back current tx snapshot for debugging visibility
         try:
             tx_snapshot = db.reference(f'/transactions/{tx_id}').get() or {}
@@ -861,10 +1171,10 @@ def entrance_snapshot(request):
         return JsonResponse({ 'ok': False, 'error': str(e) })
 
 # ───────────────────────────────────────────────────────────────
-#  Surveillance (admin or mall owner)
+#  Surveillance (admin only)
 # ───────────────────────────────────────────────────────────────
 @login_required
-@admin_required
+@admin_only_required
 def surveillance(request):
     """Simple page that embeds an ESP32-CAM MJPEG stream.
 

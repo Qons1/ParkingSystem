@@ -1,0 +1,710 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Generate Reports{% endblock %}
+{% block content %}
+<div class="container" id="reportRoot" data-generator-name="{{ generator_name }}" data-generator-email="{{ generator_email }}">
+  <div class="card" style="margin-bottom:1.5rem;">
+    <h2 style="margin-top:0;">Custom Report Builder</h2>
+    <p style="margin-bottom:1.2rem;">
+      Configure the analytics you want to capture before generating a PDF. The exported file will include your selected
+      time window, metrics, contextual notes, and the account details of the person who generated it.
+    </p>
+    <div class="form-grid">
+      <label class="form-field">
+        <span class="field-label">Period Type</span>
+        <select id="periodSelect">
+          <option value="monthly" selected>Monthly</option>
+          <option value="weekly">Weekly</option>
+          <option value="daily">Daily</option>
+        </select>
+      </label>
+      <label class="form-field">
+        <span class="field-label">Number of Periods</span>
+        <input type="number" id="periodCount" min="1" max="12" value="6" />
+        <small class="field-hint" id="periodHint">Up to 12 months</small>
+      </label>
+    </div>
+    <label class="form-field full">
+      <span class="field-label">Metrics</span>
+      <select id="metricSelect" multiple size="6">
+        <option value="total">Total Income</option>
+        <option value="car">Car Income</option>
+        <option value="motorcycle">Motorcycle Income</option>
+        <option value="transactions">Transactions Completed</option>
+        <option value="avgStay">Average Stay (minutes)</option>
+      </select>
+      <small class="field-hint">Hold Ctrl (or ⌘ on macOS) to select multiple metrics.</small>
+    </label>
+    <label class="form-field full">
+      <span class="field-label">Additional Notes (optional)</span>
+      <textarea id="notesInput" rows="3" placeholder="Include reminders, incident references, or operational notes to embed in the PDF."></textarea>
+    </label>
+    <div class="checkbox-row">
+      <label><input type="checkbox" id="includeSummary" checked> Include executive summary</label>
+      <label><input type="checkbox" id="includeDistribution" checked> Include vehicle revenue distribution</label>
+    </div>
+    <button type="button" id="generateBtn" class="primary-btn">Generate PDF Report</button>
+  </div>
+
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem;">
+      <h3 style="margin:0;">Preview</h3>
+      <span id="previewStatus" class="preview-status">Loading data…</span>
+    </div>
+    <div id="previewContent" class="preview-content">
+      <p style="margin:1rem 0;">Select one or more metrics to see the data that will be exported.</p>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script type="module">
+  const root = document.getElementById('reportRoot');
+  const periodSelect = document.getElementById('periodSelect');
+  const periodCountInput = document.getElementById('periodCount');
+  const periodHint = document.getElementById('periodHint');
+  const metricSelect = document.getElementById('metricSelect');
+  const notesInput = document.getElementById('notesInput');
+  const includeSummary = document.getElementById('includeSummary');
+  const includeDistribution = document.getElementById('includeDistribution');
+  const generateBtn = document.getElementById('generateBtn');
+  const previewContent = document.getElementById('previewContent');
+  const previewStatus = document.getElementById('previewStatus');
+
+  const generatorName = root?.dataset?.generatorName || 'Administrator';
+  const generatorEmail = root?.dataset?.generatorEmail || '';
+  const mallName = 'Riverbanks Marikina Mall';
+  const mallLocation = 'Marikina City, Philippines';
+  const headerTagline = 'Parking Usage & Revenue Analytics Overview';
+
+  const PERIOD_LIMITS = {
+    monthly: { min: 1, max: 12, default: 6, hint: 'Up to 12 months' },
+    weekly: { min: 1, max: 12, default: 8, hint: 'Up to 12 weeks' },
+    daily: { min: 1, max: 14, default: 7, hint: 'Up to 14 days' },
+  };
+
+  const fmtPeso = (v) => 'PHP ' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtNumber = (v) => Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const fmtMinutes = (v) => `${Number(v || 0).toFixed(1)} mins`;
+
+  const METRICS = {
+    total: { key: 'total', label: 'Total Income', formatter: (v) => fmtPeso(v) },
+    car: { key: 'car', label: 'Car Income', formatter: (v) => fmtPeso(v) },
+    motorcycle: { key: 'motorcycle', label: 'Motorcycle Income', formatter: (v) => fmtPeso(v) },
+    transactions: { key: 'transactions', label: 'Transactions Completed', formatter: (v) => fmtNumber(v) },
+    avgStay: { key: 'avgStay', label: 'Average Stay (minutes)', formatter: (v) => fmtMinutes(v) },
+  };
+
+  let summaryData = null;
+  let loading = false;
+
+  periodSelect.addEventListener('change', () => {
+    const lim = PERIOD_LIMITS[periodSelect.value];
+    periodCountInput.min = lim.min;
+    periodCountInput.max = lim.max;
+    periodHint.textContent = lim.hint;
+    if (Number(periodCountInput.value) > lim.max || Number(periodCountInput.value) < lim.min) {
+      periodCountInput.value = lim.default;
+    }
+    updatePreview();
+  });
+
+  periodCountInput.addEventListener('input', () => {
+    const lim = PERIOD_LIMITS[periodSelect.value];
+    if (periodCountInput.value === '') return;
+    let val = Number(periodCountInput.value);
+    if (val > lim.max) val = lim.max;
+    if (val < lim.min) val = lim.min;
+    periodCountInput.value = val;
+    updatePreview();
+  });
+
+  metricSelect.addEventListener('change', updatePreview);
+  includeSummary.addEventListener('change', updatePreview);
+  includeDistribution.addEventListener('change', updatePreview);
+  notesInput.addEventListener('input', () => {
+    // Preview only refreshes summary note section to avoid noise
+    renderPreview();
+  });
+
+  generateBtn.addEventListener('click', handleGenerate);
+
+  loadSummary();
+
+  async function loadSummary() {
+    loading = true;
+    previewStatus.textContent = 'Loading data…';
+    previewStatus.classList.add('is-loading');
+    try {
+      const res = await fetch("{% url 'analytics_summary' %}");
+      if (!res.ok) {
+        throw new Error(`Server responded with ${res.status}`);
+      }
+      summaryData = await res.json();
+      previewStatus.textContent = 'Latest data loaded';
+      previewStatus.classList.remove('is-loading');
+      previewStatus.classList.add('is-ready');
+    } catch (err) {
+      previewStatus.textContent = 'Failed to load analytics data';
+      previewStatus.classList.remove('is-loading');
+      previewStatus.classList.add('is-error');
+      console.error(err);
+    } finally {
+      loading = false;
+      updatePreview();
+    }
+  }
+
+  function getSelectedMetrics() {
+    return Array.from(metricSelect.selectedOptions || []).map((opt) => opt.value).filter(Boolean);
+  }
+
+  function extractSeries(periodType) {
+    if (!summaryData) return null;
+    const charts = summaryData.charts || {};
+    if (periodType === 'monthly') return charts.monthlyEarnings || null;
+    if (periodType === 'weekly') return charts.weeklyEarnings || null;
+    if (periodType === 'daily') return charts.dailyEarnings || null;
+    return null;
+  }
+
+  function sliceSeries(series, metrics, count) {
+    if (!series || !Array.isArray(series.labels)) return null;
+    const labels = series.labels.slice(-count);
+    const data = {};
+    metrics.forEach((metricKey) => {
+      const field = METRICS[metricKey]?.key;
+      if (!field) return;
+      const source = Array.isArray(series[field]) ? series[field] : [];
+      data[metricKey] = source.slice(-count);
+    });
+    return { labels, data };
+  }
+
+  function updatePreview() {
+    if (loading) return;
+    renderPreview();
+  }
+
+  function renderPreview() {
+    const selectedMetrics = getSelectedMetrics();
+    if (!summaryData) {
+      previewContent.innerHTML = '<p style="margin:1rem 0;">Analytics data is still loading. The preview will appear once ready.</p>';
+      return;
+    }
+    if (!selectedMetrics.length) {
+      previewContent.innerHTML = '<p style="margin:1rem 0;">Select at least one metric to build a report preview.</p>';
+      return;
+    }
+    const series = extractSeries(periodSelect.value);
+    if (!series) {
+      previewContent.innerHTML = '<p style="margin:1rem 0;">The selected period does not have any data yet.</p>';
+      return;
+    }
+    const count = Number(periodCountInput.value) || PERIOD_LIMITS[periodSelect.value].default;
+    const sliced = sliceSeries(series, selectedMetrics, count);
+    if (!sliced || !sliced.labels.length) {
+      previewContent.innerHTML = '<p style="margin:1rem 0;">No historical data is available for this configuration.</p>';
+      return;
+    }
+
+    const table = document.createElement('table');
+    table.className = 'preview-table';
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    const periodTh = document.createElement('th');
+    periodTh.textContent = 'Period';
+    headerRow.appendChild(periodTh);
+    selectedMetrics.forEach((metricKey) => {
+      const th = document.createElement('th');
+      th.textContent = METRICS[metricKey].label;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    sliced.labels.forEach((label, index) => {
+      const row = document.createElement('tr');
+      const periodCell = document.createElement('td');
+      periodCell.textContent = label;
+      row.appendChild(periodCell);
+      selectedMetrics.forEach((metricKey) => {
+        const td = document.createElement('td');
+        const value = sliced.data[metricKey]?.[index] ?? null;
+        td.textContent = value == null ? '—' : METRICS[metricKey].formatter(value);
+        row.appendChild(td);
+      });
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+
+    const notes = notesInput.value.trim();
+    const summaryBlocks = [];
+    if (includeSummary.checked) {
+      summaryBlocks.push(renderSummaryBlock(selectedMetrics, sliced));
+    }
+    if (includeDistribution.checked) {
+      summaryBlocks.push(renderDistributionBlock(sliced));
+    }
+
+    previewContent.innerHTML = '';
+    previewContent.appendChild(table);
+    summaryBlocks.filter(Boolean).forEach((block) => previewContent.appendChild(block));
+    if (notes) {
+      const noteDiv = document.createElement('div');
+      noteDiv.className = 'preview-notes';
+      noteDiv.innerHTML = `<strong>Notes:</strong> ${escapeHtml(notes)}`;
+      previewContent.appendChild(noteDiv);
+    }
+  }
+
+  function renderSummaryBlock(selectedMetrics, sliced) {
+    const container = document.createElement('div');
+    container.className = 'preview-summary';
+    const title = document.createElement('h4');
+    title.textContent = 'Executive Summary';
+    container.appendChild(title);
+    const list = document.createElement('ul');
+    selectedMetrics.forEach((metricKey) => {
+      const values = sliced.data[metricKey] || [];
+      if (!values.length) return;
+      let summaryLine = '';
+      if (metricKey === 'avgStay') {
+        const filtered = values.filter((v) => typeof v === 'number' && !Number.isNaN(v));
+        const avg = filtered.length ? filtered.reduce((acc, v) => acc + Number(v || 0), 0) / filtered.length : 0;
+        summaryLine = `${METRICS[metricKey].label}: ${avg.toFixed(1)} mins average across ${filtered.length} period(s).`;
+      } else {
+        const total = values.reduce((acc, v) => acc + Number(v || 0), 0);
+        const formatted = metricKey === 'transactions' ? fmtNumber(total) : fmtPeso(total);
+        summaryLine = `${METRICS[metricKey].label}: ${formatted} across ${values.length} period(s).`;
+      }
+      const li = document.createElement('li');
+      li.textContent = summaryLine;
+      list.appendChild(li);
+    });
+    if (!list.children.length) return null;
+    container.appendChild(list);
+    return container;
+  }
+
+  function renderDistributionBlock(sliced) {
+    const carSeries = sliced.data.car || [];
+    const motoSeries = sliced.data.motorcycle || [];
+    if (!carSeries.length && !motoSeries.length) return null;
+    const totalCar = carSeries.reduce((acc, v) => acc + Number(v || 0), 0);
+    const totalMotor = motoSeries.reduce((acc, v) => acc + Number(v || 0), 0);
+    const combined = totalCar + totalMotor;
+    if (combined <= 0) return null;
+    const container = document.createElement('div');
+    container.className = 'preview-summary';
+    const title = document.createElement('h4');
+    title.textContent = 'Vehicle Revenue Distribution';
+    container.appendChild(title);
+    const motorShare = (totalMotor / combined) * 100;
+    const carShare = 100 - motorShare;
+    const distributionList = document.createElement('ul');
+    const carLi = document.createElement('li');
+    carLi.textContent = `Car: ${fmtPeso(totalCar)} (${carShare.toFixed(1)}%)`;
+    const motorLi = document.createElement('li');
+    motorLi.textContent = `Motorcycle: ${fmtPeso(totalMotor)} (${motorShare.toFixed(1)}%)`;
+    distributionList.appendChild(carLi);
+    distributionList.appendChild(motorLi);
+    container.appendChild(distributionList);
+    return container;
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[ch] || ch));
+  }
+
+  async function handleGenerate() {
+    if (!summaryData) {
+      alert('Analytics data has not finished loading. Please wait a moment and try again.');
+      return;
+    }
+    const metrics = getSelectedMetrics();
+    if (!metrics.length) {
+      alert('Select at least one metric before generating a report.');
+      return;
+    }
+    const { jsPDF } = window.jspdf || {};
+    if (!jsPDF) {
+      alert('PDF library is not available. Please refresh the page and try again.');
+      return;
+    }
+    const series = extractSeries(periodSelect.value);
+    if (!series) {
+      alert('No data is available for the selected period type yet.');
+      return;
+    }
+    const count = Number(periodCountInput.value) || PERIOD_LIMITS[periodSelect.value].default;
+    const sliced = sliceSeries(series, metrics, count);
+    if (!sliced || !sliced.labels.length) {
+      alert('No historical data matched your selection.');
+      return;
+    }
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const marginLeft = 14;
+    const marginRight = 14;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const centerX = pageWidth / 2;
+    const contentWidth = pageWidth - marginLeft - marginRight;
+    let cursorY = 20;
+
+    const generatedAt = new Date();
+    const periodLabel = periodSelect.options[periodSelect.selectedIndex]?.text || periodSelect.value;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.text('CYGO Analytics Custom Report', centerX, cursorY, { align: 'center' });
+    cursorY += 6;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(12);
+    doc.text(`${mallName} • Smart Parking Operations`, centerX, cursorY, { align: 'center' });
+    cursorY += 5;
+    doc.setFontSize(10);
+    doc.text(`Location: ${mallLocation}`, centerX, cursorY, { align: 'center' });
+    cursorY += 5;
+    doc.text(headerTagline, centerX, cursorY, { align: 'center' });
+    cursorY += 7;
+
+    doc.setFontSize(11);
+    const headerLines = [
+      `Generated by: ${generatorName}${generatorEmail ? ' <' + generatorEmail + '>' : ''}`,
+      `Generated at: ${generatedAt.toLocaleString()}`,
+      `Period type: ${periodLabel}`,
+      `Number of periods: ${sliced.labels.length}`,
+      `Metrics: ${metrics.map((m) => METRICS[m].label).join(', ') || 'None selected'}`,
+    ];
+    headerLines.forEach((line) => {
+      doc.text(line, centerX, cursorY, { align: 'center' });
+      cursorY += 5;
+    });
+    cursorY += 6;
+
+    const notes = notesInput.value.trim();
+    if (notes) {
+      doc.setFont('helvetica', 'bold');
+      doc.text('Additional Notes', marginLeft, cursorY);
+      cursorY += 6;
+      doc.setFont('helvetica', 'normal');
+      const wrapped = doc.splitTextToSize(notes, contentWidth);
+      doc.text(wrapped, marginLeft, cursorY);
+      cursorY += wrapped.length * 5 + 4;
+    }
+
+    if (includeSummary.checked) {
+      const summaryLines = buildSummaryLines(metrics, sliced);
+      if (summaryLines.length) {
+        doc.setFont('helvetica', 'bold');
+        doc.text('Executive Summary', marginLeft, cursorY);
+        cursorY += 6;
+        doc.setFont('helvetica', 'normal');
+        summaryLines.forEach((line) => {
+          const wrapped = doc.splitTextToSize(line, contentWidth - 6);
+          if (cursorY + wrapped.length * 5 > 270) {
+            doc.addPage();
+            cursorY = 18;
+          }
+          wrapped.forEach((segment, idx) => {
+            const prefix = idx === 0 ? '- ' : '  ';
+            doc.text(prefix + segment, marginLeft, cursorY);
+            cursorY += 5;
+          });
+        });
+        cursorY += 4;
+      }
+    }
+
+    if (includeDistribution.checked) {
+      const distributionLines = buildDistributionLines(sliced);
+      if (distributionLines.length) {
+        if (cursorY + distributionLines.length * 5 + 10 > 270) {
+          doc.addPage();
+          cursorY = 18;
+        }
+        doc.setFont('helvetica', 'bold');
+        doc.text('Vehicle Revenue Distribution', marginLeft, cursorY);
+        cursorY += 6;
+        doc.setFont('helvetica', 'normal');
+        distributionLines.forEach((line) => {
+          const wrapped = doc.splitTextToSize(line, contentWidth - 6);
+          wrapped.forEach((segment, idx) => {
+            const prefix = idx === 0 ? '- ' : '  ';
+            doc.text(prefix + segment, marginLeft, cursorY);
+            cursorY += 5;
+          });
+        });
+        cursorY += 4;
+      }
+    }
+
+    const columnCount = metrics.length + 1;
+    const usableWidth = pageWidth - marginLeft - marginRight;
+    const columnWidth = usableWidth / columnCount;
+    const headers = ['Period', ...metrics.map((m) => METRICS[m].label)];
+    const headerLinesByCol = headers.map((header) => doc.splitTextToSize(header, columnWidth - 4));
+    const headerMaxLines = Math.max(...headerLinesByCol.map((lines) => lines.length)) || 1;
+    const lineHeight = 5;
+
+    const renderHeader = () => {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      for (let lineIdx = 0; lineIdx < headerMaxLines; lineIdx++) {
+        let printed = false;
+        headers.forEach((_, idx) => {
+          const line = headerLinesByCol[idx][lineIdx] || '';
+          if (!line) {
+            return;
+          }
+          printed = true;
+          const baseX = marginLeft + idx * columnWidth;
+          const align = idx === 0 ? 'left' : 'center';
+          const x = align === 'left' ? baseX : baseX + columnWidth / 2;
+          const options = align === 'center' ? { align: 'center' } : undefined;
+          doc.text(line, x, cursorY, options);
+        });
+        if (printed) {
+          cursorY += lineHeight;
+        }
+      }
+      cursorY += 2;
+      doc.setFont('helvetica', 'normal');
+    };
+
+    const ensureHeaderSpace = () => {
+      if (cursorY + headerMaxLines * lineHeight + 2 > 278) {
+        doc.addPage();
+        cursorY = 18;
+      }
+      renderHeader();
+    };
+
+    ensureHeaderSpace();
+
+    const renderRow = (values) => {
+      const cellLines = values.map((value) => doc.splitTextToSize(value, columnWidth - 4));
+      const rowMaxLines = Math.max(...cellLines.map((lines) => lines.length)) || 1;
+      if (cursorY + rowMaxLines * lineHeight > 278) {
+        doc.addPage();
+        cursorY = 18;
+        renderHeader();
+      }
+      for (let lineIdx = 0; lineIdx < rowMaxLines; lineIdx++) {
+        values.forEach((_, idx) => {
+          const line = cellLines[idx][lineIdx] || '';
+          if (!line) return;
+          const baseX = marginLeft + idx * columnWidth;
+          const align = idx === 0 ? 'left' : 'center';
+          const x = align === 'left' ? baseX : baseX + columnWidth / 2;
+          const options = align === 'center' ? { align: 'center' } : undefined;
+          doc.text(line, x, cursorY, options);
+        });
+        cursorY += lineHeight;
+      }
+      cursorY += 2;
+    };
+
+    sliced.labels.forEach((label, rowIdx) => {
+      const rowValues = [
+        label,
+        ...metrics.map((metricKey) => {
+          const value = sliced.data[metricKey]?.[rowIdx] ?? null;
+          return value == null ? '—' : METRICS[metricKey].formatter(value);
+        }),
+      ];
+      renderRow(rowValues);
+    });
+
+    const totalPages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(9);
+      doc.text(`CYGO Smart Parking - Generated ${generatedAt.toLocaleString()}`, marginLeft, 288);
+      doc.text(`Page ${i} of ${totalPages}`, doc.internal.pageSize.getWidth() - marginRight - 30, 288);
+    }
+
+    const filenameSafePeriod = periodSelect.value;
+    doc.save(`cygo-report-${filenameSafePeriod}-${generatedAt.toISOString().slice(0,10)}.pdf`);
+  }
+
+  function buildSummaryLines(metrics, sliced) {
+    const lines = [];
+    metrics.forEach((metricKey) => {
+      const values = sliced.data[metricKey] || [];
+      if (!values.length) return;
+      if (metricKey === 'avgStay') {
+        const filtered = values.filter((v) => typeof v === 'number' && !Number.isNaN(v));
+        const avg = filtered.length ? filtered.reduce((acc, v) => acc + Number(v || 0), 0) / filtered.length : 0;
+        lines.push(`${METRICS[metricKey].label}: ${avg.toFixed(1)} mins average across ${filtered.length} period(s).`);
+      } else {
+        const total = values.reduce((acc, v) => acc + Number(v || 0), 0);
+        const formatted = metricKey === 'transactions' ? fmtNumber(total) : fmtPeso(total);
+        lines.push(`${METRICS[metricKey].label}: ${formatted} across ${values.length} period(s).`);
+      }
+    });
+    return lines;
+  }
+
+  function buildDistributionLines(sliced) {
+    const lines = [];
+    const carSeries = sliced.data.car || [];
+    const motoSeries = sliced.data.motorcycle || [];
+    if (!carSeries.length && !motoSeries.length) return lines;
+    const totalCar = carSeries.reduce((acc, v) => acc + Number(v || 0), 0);
+    const totalMotor = motoSeries.reduce((acc, v) => acc + Number(v || 0), 0);
+    const combined = totalCar + totalMotor;
+    if (combined <= 0) return lines;
+    const carShare = (totalCar / combined) * 100;
+    const motorShare = 100 - carShare;
+    lines.push(`Car revenue: ${fmtPeso(totalCar)} (${carShare.toFixed(1)}%)`);
+    lines.push(`Motorcycle revenue: ${fmtPeso(totalMotor)} (${motorShare.toFixed(1)}%)`);
+    return lines;
+  }
+</script>
+<style>
+  #reportRoot select,
+  #reportRoot input[type="number"],
+  #reportRoot textarea {
+    width: 100%;
+    padding: 0.55rem 0.65rem;
+    border-radius: 8px;
+    border: 1px solid rgba(0,0,0,0.15);
+    font-size: 0.95rem;
+    font-family: inherit;
+    box-sizing: border-box;
+  }
+  #reportRoot textarea {
+    resize: vertical;
+    min-height: 76px;
+  }
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .form-field.full {
+    margin-top: 1rem;
+  }
+  .field-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .field-hint {
+    font-size: 0.8rem;
+    color: #666;
+  }
+  .checkbox-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    margin: 1rem 0 1.2rem;
+    font-size: 0.9rem;
+  }
+  .checkbox-row input {
+    margin-right: 0.4rem;
+  }
+  .primary-btn {
+    background: #103d85;
+    color: #fff;
+    border: none;
+    padding: 0.55rem 1.4rem;
+    border-radius: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s ease, transform 0.08s ease;
+  }
+  .primary-btn:hover {
+    background: #0b2c63;
+  }
+  .primary-btn:active {
+    transform: translateY(1px);
+  }
+  .preview-content {
+    overflow-x: auto;
+    margin-top: 1rem;
+  }
+  .preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+  }
+  .preview-table th,
+  .preview-table td {
+    border: 1px solid #d8dbe8;
+    padding: 0.55rem 0.6rem;
+    text-align: left;
+  }
+  .preview-table th {
+    background: #f5f7ff;
+    font-weight: 600;
+  }
+  .preview-table tr:nth-child(even) td {
+    background: #fafbff;
+  }
+  .preview-summary {
+    margin-top: 1.25rem;
+    padding: 1rem;
+    border: 1px solid #d8dbe8;
+    border-radius: 10px;
+    background: #fcfdff;
+  }
+  .preview-summary h4 {
+    margin: 0 0 0.5rem;
+    font-size: 1rem;
+  }
+  .preview-summary ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    color: #2f3b52;
+  }
+  .preview-summary li {
+    margin: 0.2rem 0;
+  }
+  .preview-notes {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    border-radius: 8px;
+    background: #fff4d6;
+    border: 1px solid #ffd88a;
+    color: #624a05;
+  }
+  .preview-status {
+    font-size: 0.85rem;
+    color: #5c6478;
+  }
+  .preview-status.is-loading::before {
+    content: '●';
+    color: #f4a930;
+    margin-right: 0.4rem;
+  }
+  .preview-status.is-ready::before {
+    content: '●';
+    color: #2e7d32;
+    margin-right: 0.4rem;
+  }
+  .preview-status.is-error {
+    color: #c62828;
+  }
+  .preview-status.is-error::before {
+    content: '●';
+    color: #c62828;
+    margin-right: 0.4rem;
+  }
+</style>
+{% endblock %}
+

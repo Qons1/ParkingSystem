@@ -8,7 +8,7 @@ body {
 
 /* ─── Main content area (to the right of the sidebar) ─────────────────── */
 main {
-    margin-left: 250px;           /* match .sidebar width */
+    margin-left: 230px;           /* match .sidebar width */
     padding: 2rem;                /* breathing room */
     min-height: 100vh;
     box-sizing: border-box;
@@ -19,7 +19,7 @@ main {
     position: fixed;
     top: 0;
     left: 0;
-    width: 220px;
+    width: 200px;
     height: 100vh;
     background: linear-gradient(180deg, #e8b931 0%, #f1cc52 100%);
     padding: 1rem;
@@ -33,8 +33,8 @@ main {
 .username { font-weight: 700; color: #fff; letter-spacing: .2px; }
 .nav-link {
     display: block;
-    padding: 0.6rem .8rem;
-    margin: 0.25rem 0;
+    padding: 0.45rem .6rem;
+    margin: 0.18rem 0;
     color: #fff;
     text-decoration: none;
     border-radius: 8px;
@@ -78,6 +78,7 @@ input, textarea, select {
     border-radius: 8px;
     margin-bottom: 1rem;
     background:#fff;
+    box-sizing: border-box;
     transition: box-shadow .15s ease, border-color .15s ease;
 }
 input:focus, textarea:focus, select:focus { outline: none; border-color: #e8b931; box-shadow: 0 0 0 3px rgba(232,185,49,.35); }

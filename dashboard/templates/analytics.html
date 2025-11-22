@@ -20,13 +20,20 @@
       </div>
     </div>
 
-    <!-- Weekly Earnings + Avg Stay (each chart scrolls individually; forced side-by-side) -->
-    <div style="display:flex; gap:1rem; padding: 0 1rem 1rem; flex-wrap: nowrap; align-items: stretch;">
-      <div class="card chart-card" style="flex:1 1 0; min-width:0;">
-        <div class="chart-title">Weekly Earnings</div>
-        <div class="chart-scroll"><div style="min-width:900px;"><canvas id="earningsWeekly" width="900" height="260"></canvas></div></div>
+    <!-- Monthly Earnings + Avg Stay -->
+    <div style="display:flex; gap:1rem; padding: 0 1rem 1rem; flex-wrap: wrap; align-items: stretch;">
+      <div class="card chart-card" style="flex:1 1 480px; min-width:360px;">
+        <div class="chart-title">Monthly Earnings (Cars vs Motorcycles)</div>
+        <div class="chart-scroll">
+          <div style="min-width:900px;"><canvas id="earningsMonthly" width="900" height="280"></canvas></div>
+        </div>
+        <div class="comparison-grid">
+          <div>Current (<span id="monthly-current-label">-</span>): <span id="monthly-current-value">₱0.00</span></div>
+          <div>Previous (<span id="monthly-previous-label">-</span>): <span id="monthly-previous-value">₱0.00</span></div>
+          <div>Change: <span id="monthly-delta-value" class="delta">₱0.00</span></div>
+        </div>
       </div>
-      <div class="card chart-card" style="flex:1 1 0; min-width:0;">
+      <div class="card chart-card" style="flex:1 1 420px; min-width:320px;">
         <div class="chart-title">Avg Stay (mins) by Day</div>
         <div class="chart-scroll"><div style="min-width:900px;"><canvas id="avgStayWeekly" width="900" height="260"></canvas></div></div>
       </div>
@@ -64,8 +71,15 @@
   const occProgressCtx = document.getElementById('occProgress');
   const occLegend = document.getElementById('occLegend');
   const hourlyCtx = document.getElementById('entriesHourly');
-  const earningsWeeklyCtx = document.getElementById('earningsWeekly');
-  const avgStayWeeklyCtx = document.getElementById('avgStayWeekly');
+  const earningsMonthlyCtx = document.getElementById('earningsMonthly');
+  const avgStayCtx = document.getElementById('avgStayWeekly');
+  const monthlyCurrentLabelEl = document.getElementById('monthly-current-label');
+  const monthlyCurrentValueEl = document.getElementById('monthly-current-value');
+  const monthlyPreviousLabelEl = document.getElementById('monthly-previous-label');
+  const monthlyPreviousValueEl = document.getElementById('monthly-previous-value');
+  const monthlyDeltaValueEl = document.getElementById('monthly-delta-value');
+
+  let monthlySnapshot = { labels: [], car: [], motor: [], total: [], comparison: {} };
 
   const centerTextPlugin = {
     id: 'centerText',
@@ -115,13 +129,32 @@
     options: { responsive: false, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
   });
 
-  const earningsWeeklyChart = new Chart(earningsWeeklyCtx, {
+  const earningsMonthlyChart = new Chart(earningsMonthlyCtx, {
     type: 'line',
-    data: { labels: days, datasets: [{ label: 'Earnings', data: Array(7).fill(0), borderColor: '#673ab7', backgroundColor: 'rgba(103,58,183,0.2)', tension: 0.35, fill: true, pointRadius: 3 }] },
-    options: { responsive: false, maintainAspectRatio: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: 'bottom' }, tooltip: { callbacks: { label: (ctx)=> fmtPeso(ctx.parsed.y) } } } }
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Car', data: [], borderColor: '#f4c430', backgroundColor: 'rgba(244,196,48,0.2)', tension: 0.35, fill: true, pointRadius: 3 },
+        { label: 'Motorcycle', data: [], borderColor: '#4caf50', backgroundColor: 'rgba(76,175,80,0.2)', tension: 0.35, fill: true, pointRadius: 3 },
+        { label: 'Total', data: [], borderColor: '#673ab7', backgroundColor: 'rgba(103,58,183,0.18)', tension: 0.35, fill: true, pointRadius: 3 }
+      ]
+    },
+    options: {
+      responsive: false,
+      maintainAspectRatio: false,
+      scales: { y: { beginAtZero: true } },
+      plugins: {
+        legend: { position: 'bottom' },
+        tooltip: {
+          callbacks: {
+            label: (ctx)=> `${ctx.dataset.label}: ${fmtPeso(ctx.parsed.y)}`
+          }
+        }
+      }
+    }
   });
 
-  const avgStayWeeklyChart = new Chart(avgStayWeeklyCtx, {
+  const avgStayChart = new Chart(avgStayCtx, {
     type: 'line',
     data: { labels: days, datasets: [{ label: 'Avg Stay (mins)', data: Array(7).fill(0), borderColor: '#009688', backgroundColor: 'rgba(0,150,136,0.2)', tension: 0.35, fill: true, pointRadius: 3 }] },
     options: { responsive: false, maintainAspectRatio: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: 'bottom' } } }
@@ -141,8 +174,6 @@
     const capacityInfo = (o.capacity || {});
     const totalSlots = Math.max(capacityInfo.totalSlots || 0, totalOccupied);
     const availableSlots = Math.max(totalSlots - totalOccupied, 0);
-    const occupiedEl = document.getElementById('kpi-occupied');
-    if (occupiedEl) occupiedEl.innerText = totalOccupied;
 
     occProgressChart.data.datasets[0].data = [
       totalOccupied,
@@ -160,19 +191,51 @@
         </div>`;
     }
 
-    // Update hourly entries chart
     hourlyChart.data.datasets[0].data = (Array.isArray(h) ? h : Array(24).fill(0));
     hourlyChart.update();
 
-    // Weekly earnings line
-    const earnArr = Array.isArray(ch.weeklyEarningsByDay) ? ch.weeklyEarningsByDay : Array(7).fill(0);
-    earningsWeeklyChart.data.datasets[0].data = earnArr;
-    earningsWeeklyChart.update();
+    const monthly = ch.monthlyEarnings || {};
+    const monthLabels = Array.isArray(monthly.labels) ? monthly.labels : [];
+    const carData = Array.isArray(monthly.car) ? monthly.car : [];
+    const motorData = Array.isArray(monthly.motorcycle) ? monthly.motorcycle : [];
+    const totalData = Array.isArray(monthly.total) ? monthly.total : [];
 
-    // Avg stay line
+    earningsMonthlyChart.data.labels = monthLabels;
+    earningsMonthlyChart.data.datasets[0].data = carData;
+    earningsMonthlyChart.data.datasets[1].data = motorData;
+    earningsMonthlyChart.data.datasets[2].data = totalData;
+    earningsMonthlyChart.update();
+
+    monthlySnapshot = {
+      labels: monthLabels,
+      car: carData,
+      motor: motorData,
+      total: totalData,
+      comparison: ch.monthlyComparison || {}
+    };
+
+    const comp = monthlySnapshot.comparison || {};
+    const currentTotal = typeof comp.currentTotal === 'number' ? comp.currentTotal : 0;
+    const previousTotal = typeof comp.previousTotal === 'number' ? comp.previousTotal : 0;
+    const diffValue = typeof comp.difference === 'number' ? comp.difference : 0;
+    const currentLabel = comp.currentLabel || (monthLabels.slice(-1)[0] || '-');
+    const previousLabel = comp.previousLabel || (monthLabels.slice(-2, -1)[0] || '-');
+
+    if (monthlyCurrentLabelEl) monthlyCurrentLabelEl.textContent = currentLabel;
+    if (monthlyCurrentValueEl) monthlyCurrentValueEl.textContent = fmtPeso(currentTotal);
+    if (monthlyPreviousLabelEl) monthlyPreviousLabelEl.textContent = previousLabel;
+    if (monthlyPreviousValueEl) monthlyPreviousValueEl.textContent = fmtPeso(previousTotal);
+    if (monthlyDeltaValueEl) {
+      const diffText = fmtPeso(Math.abs(diffValue));
+      monthlyDeltaValueEl.textContent = `${diffValue >= 0 ? '+' : '-'}${diffText}`;
+      monthlyDeltaValueEl.classList.remove('positive', 'negative');
+      if (diffValue > 0) monthlyDeltaValueEl.classList.add('positive');
+      else if (diffValue < 0) monthlyDeltaValueEl.classList.add('negative');
+    }
+
     const stayArr = Array.isArray(ch.avgStayMinsByDay) ? ch.avgStayMinsByDay : Array(7).fill(0);
-    avgStayWeeklyChart.data.datasets[0].data = stayArr;
-    avgStayWeeklyChart.update();
+    avgStayChart.data.datasets[0].data = stayArr;
+    avgStayChart.update();
   }
 
   await refresh();
@@ -182,6 +245,9 @@
   .chart-card{ position: relative; }
   .chart-title{ position: sticky; top: 0; text-align: center; font-weight: 700; padding: 8px 0; background: #fff; z-index: 2; }
   .chart-scroll{ overflow-x: auto; }
+  .comparison-grid{ display:flex; flex-wrap:wrap; gap:1rem; justify-content:center; padding:0.75rem 0; font-weight:600; }
+  .comparison-grid .delta.positive{ color:#2e7d32; }
+  .comparison-grid .delta.negative{ color:#c62828; }
   .occ-legend-row{ display:flex; flex-wrap:wrap; gap:12px; justify-content:center; font-size:.9rem; }
   .occ-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; }
   .occ-car{ background:#f4c430; }

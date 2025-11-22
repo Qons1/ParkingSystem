@@ -14,6 +14,7 @@ urlpatterns = [
     path('api/decline-pwd/', views.decline_pwd, name='decline_pwd'),
     path('api/resolve-incident/', views.resolve_incident, name='resolve_incident'),
     path('api/delete-user/', views.delete_firebase_user, name='delete_firebase_user'),
+    path('api/ban-user/', views.ban_user, name='ban_user'),
     path('pending/', views.pending, name='pending'),
     path('reports/', views.reports, name='reports'),
     path('database/', views.database, name='database'),
@@ -26,6 +27,7 @@ urlpatterns = [
     path('api/analytics/summary', views.analytics_summary, name='analytics_summary'),
     path('logout/', views.logout_view, name='logout'),
     path('analytics/', views.analytics, name='analytics'),
+    path('reports/generate/', views.report_builder, name='report_builder'),
     # Registration and email verification
     path('register/', views.register_view, name='register'),
     path('verify-email/<uidb64>/<token>/', views.verify_email, name='verify_email'),

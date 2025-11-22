@@ -12,7 +12,11 @@
     <!-- Tabs -->
     <div style="display:flex; gap:.5rem; margin-top:.75rem;">
       <button id="tabBtnParking" class="btn" style="background:#e6f0ff; color:#103d85;">Parking</button>
-      <button id="tabBtnTx" class="btn" style="background:#f3f3f3; color:#333;">Transactions</button>
+      {% if user.is_mall_owner %}
+        <button id="tabBtnAudit" class="btn" style="background:#f3f3f3; color:#333;">Audit Trail</button>
+      {% else %}
+        <button id="tabBtnTx" class="btn" style="background:#f3f3f3; color:#333;">Transactions</button>
+      {% endif %}
     </div>
 
     <!-- Parking Tab -->
@@ -57,7 +61,8 @@
     {% endif %}
     </div>
 
-    <!-- Transactions Tab -->
+    {% if user.is_admin and not user.is_mall_owner %}
+    <!-- Transactions Tab (admin only) -->
     <div id="tabTransactions" style="display:none; margin-top: 1rem;">
       <div class="table-scroll-x">
         <table style="min-width: 1100px;">
@@ -80,32 +85,66 @@
         </table>
       </div>
     </div>
+    {% endif %}
+
+    {% if user.is_mall_owner %}
+    <!-- Audit Trail Tab -->
+    <div id="tabAudit" style="display:none; margin-top: 1rem;">
+      <div class="table-scroll-x">
+        <table style="min-width: 820px;">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Action</th>
+              <th>Target User</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="auditBody">
+            <tr><td colspan="4" style="text-align:center;color:#777;">No audit entries yet…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
   </div>
 </div>
 
 {% if user.is_mall_owner %}
+<div id="mallOwnerMeta" data-actor="{{ user.email|default:user.username|default:'mall-owner' }}"></div>
 <script type="module">
   import { firebaseConfig } from "{% static 'js/firebaseConfig.js' %}";
   import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-  import { getDatabase, ref, onValue, update, remove } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+  import { getDatabase, ref, onValue, push, set } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
   const appMall = initializeApp(firebaseConfig, 'mall');
   const dbMall = getDatabase(appMall);
  
   const tbody = document.getElementById('fbUsersBody');
-  const txBody = document.getElementById('txBody');
   const searchEl = document.getElementById('searchInput');
   const messageBox = document.getElementById('messageBox');
   const deleteModal = document.getElementById('deleteModal');
   const deleteModalText = document.getElementById('deleteModalText');
   const deleteCancelBtn = document.getElementById('deleteCancelBtn');
   const deleteConfirmBtn = document.getElementById('deleteConfirmBtn');
+  const banModal = document.getElementById('banModal');
+  const banModalText = document.getElementById('banModalText');
+  const banReasonInput = document.getElementById('banReasonInput');
+  const banCharCount = document.getElementById('banCharCount');
+  const banCancelBtn = document.getElementById('banCancelBtn');
+  const banConfirmBtn = document.getElementById('banConfirmBtn');
+  const auditBody = document.getElementById('auditBody');
+  const actorEmail = document.getElementById('mallOwnerMeta')?.dataset?.actor || 'mall-owner';
 
   let pendingDeleteUid = null;
+  let pendingBanUid = null;
+  let pendingDeleteMeta = null;
+  let pendingBanMeta = null;
 
   let usersData = {};
   let txStatusByUid = {};
   let txMap = {};
+  let auditMap = {};
 
   function computeTxStatusMap(transactions) {
     const map = {};
@@ -137,10 +176,8 @@
       const rowText = `${displayName} ${email} ${contact} ${userType} ${pwdStatus} ${activeState}`.toLowerCase();
       if (term && !rowText.includes(term)) return '';
       const actions = `
-        <div class=\"actions\"> 
-          <button class=\"btn btn-edit mall-edit\" data-uid=\"${uid}\">Edit</button>
-          <button class=\"btn btn-save mall-save\" data-uid=\"${uid}\" style=\"display:none;\">Save</button>
-          <button class=\"btn btn-cancel mall-cancel\" data-uid=\"${uid}\" style=\"display:none;\">Cancel</button>
+        <div class=\"actions\">
+          <button class=\"btn btn-ban mall-ban\" data-uid=\"${uid}\">Ban</button>
           <button class=\"btn btn-del mall-del\" data-uid=\"${uid}\">Delete</button>
         </div>`;
       return `<tr data-uid=\"${uid}\">\n        <td class=\"c-name\">${displayName}</td>\n        <td class=\"c-email\">${email}</td>\n        <td class=\"c-contact\">${contact}</td>\n        <td class=\"c-type\">${userType}</td>\n        <td class=\"c-pwd\">${pwdStatus}</td>\n        <td class=\"c-active\">${activeState}</td>\n        <td>${actions}</td>\n      </tr>`;
@@ -148,42 +185,29 @@
     tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan=\"7\" style=\"text-align:center;color:#777;\">No users found.</td></tr>`;
   }
 
-  function renderTx(){
-    // Build name lookup once
-    const term = (searchEl.value || '').toLowerCase();
-    const rows = Object.entries(txMap).map(([txId, t])=>{
-      const uid = t?.uid || '';
-      const u = usersData[uid] || {};
-      const name = u.displayName || u.email || uid;
-      const veh = (t?.vehicleType || '').toString();
-      const slot = (t?.slot || '').toString();
-      const tin = fmt(t?.timeIn);
-      const tout = fmt(t?.timeOut);
-      const st  = (t?.status || '').toString();
-      const paid= money(t?.amountPaid);
-      const plate = (t?.plateNumber || '').toString();
-      const rowText = `${txId} ${name} ${veh} ${slot} ${st} ${plate}`.toLowerCase();
-      if (term && !rowText.includes(term)) return '';
-      return `<tr>\n  <td>${txId}</td>\n  <td>${name}</td>\n  <td>${veh}</td>\n  <td>${slot||'-'}</td>\n  <td>${tin||'-'}</td>\n  <td>${tout||'-'}</td>\n  <td>${st}</td>\n  <td>${paid}</td>\n  <td>${plate}</td>\n</tr>`;
-    }).filter(Boolean);
-    txBody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan=\"9\" style=\"text-align:center;color:#777;\">No transactions found.</td></tr>`;
-  }
-
-  onValue(ref(dbMall, '/users'), (snap) => { usersData = snap.val() || {}; renderUsers(); renderTx(); });
-  onValue(ref(dbMall, '/transactions'), (snap) => { const v = snap.val() || {}; txMap = v; txStatusByUid = computeTxStatusMap(v); renderUsers(); renderTx(); });
+  onValue(ref(dbMall, '/users'), (snap) => { usersData = snap.val() || {}; renderUsers(); });
+  onValue(ref(dbMall, '/transactions'), (snap) => { const v = snap.val() || {}; txMap = v; txStatusByUid = computeTxStatusMap(v); renderUsers(); });
+  onValue(ref(dbMall, '/auditTrail'), (snap) => { auditMap = snap.val() || {}; renderAudit(); });
   searchEl.addEventListener('input', ()=>{ renderUsers(); renderTx(); });
 
   // Tabs
   const tabBtnParking = document.getElementById('tabBtnParking');
   const tabBtnTx = document.getElementById('tabBtnTx');
+  const tabBtnAudit = document.getElementById('tabBtnAudit');
   const tabParking = document.getElementById('tabParking');
   const tabTx = document.getElementById('tabTransactions');
+  const tabAudit = document.getElementById('tabAudit');
   function showTab(which){
-    if (which==='tx'){ tabTx.style.display='block'; tabParking.style.display='none'; tabBtnTx.style.background='#e6f0ff'; tabBtnParking.style.background='#f3f3f3'; }
-    else { tabTx.style.display='none'; tabParking.style.display='block'; tabBtnParking.style.background='#e6f0ff'; tabBtnTx.style.background='#f3f3f3'; }
+    if (tabParking) tabParking.style.display = which === 'parking' ? 'block' : 'none';
+    if (tabTx) tabTx.style.display = which === 'tx' ? 'block' : 'none';
+    if (tabAudit) tabAudit.style.display = which === 'audit' ? 'block' : 'none';
+    if (tabBtnParking) tabBtnParking.style.background = which === 'parking' ? '#e6f0ff' : '#f3f3f3';
+    if (tabBtnTx) tabBtnTx.style.background = which === 'tx' ? '#e6f0ff' : '#f3f3f3';
+    if (tabBtnAudit) tabBtnAudit.style.background = which === 'audit' ? '#e6f0ff' : '#f3f3f3';
   }
-  tabBtnParking.addEventListener('click', ()=> showTab('parking'));
-  tabBtnTx.addEventListener('click', ()=> showTab('tx'));
+  tabBtnParking?.addEventListener('click', ()=> showTab('parking'));
+  tabBtnTx?.addEventListener('click', ()=> showTab('tx'));
+  tabBtnAudit?.addEventListener('click', ()=> showTab('audit'));
 
   // Client-side search
   document.getElementById('searchInput').addEventListener('input', () => {
@@ -195,67 +219,42 @@
     });
   });
 
-  // Inline Edit/Save/Cancel/Delete handlers (mall owner)
+  // Action handlers (mall owner)
   tbody.addEventListener('click', async (e) => {
     const btn = e.target.closest('button'); if (!btn) return;
     const uid = btn.getAttribute('data-uid'); if (!uid) return;
-    const tr = btn.closest('tr');
-    const nameCell = tr.querySelector('.c-name');
-    const contactCell = tr.querySelector('.c-contact');
-    const typeCell = tr.querySelector('.c-type');
-    const pwdCell = tr.querySelector('.c-pwd');
-    const editBtn = tr.querySelector('.mall-edit');
-    const saveBtn = tr.querySelector('.mall-save');
-    const cancelBtn = tr.querySelector('.mall-cancel');
+    const targetData = usersData[uid] || {};
 
-    if (btn.classList.contains('mall-edit')){
-      // store originals
-      nameCell.dataset.orig = nameCell.textContent || '';
-      contactCell.dataset.orig = contactCell.textContent || '';
-      typeCell.dataset.orig = (typeCell.textContent || 'regular').trim();
-      pwdCell.dataset.orig = (pwdCell.textContent || 'none').trim();
-      // inputs
-      nameCell.innerHTML = `<input value="${nameCell.dataset.orig}"/>`;
-      contactCell.innerHTML = `<input value="${contactCell.dataset.orig}"/>`;
-      typeCell.innerHTML = `<select><option value="regular">regular</option><option value="pwd">pwd</option></select>`;
-      typeCell.querySelector('select').value = typeCell.dataset.orig;
-      pwdCell.innerHTML = `<select><option value="none">none</option><option value="pending">pending</option><option value="approved">approved</option><option value="rejected">rejected</option></select>`;
-      pwdCell.querySelector('select').value = pwdCell.dataset.orig;
-      editBtn.style.display='none'; tr.querySelector('.mall-del').style.display='none';
-      saveBtn.style.display='inline-block'; cancelBtn.style.display='inline-block';
-    } else if (btn.classList.contains('mall-cancel')){
-      // restore originals
-      nameCell.textContent = nameCell.dataset.orig || '';
-      contactCell.textContent = contactCell.dataset.orig || '';
-      typeCell.textContent = typeCell.dataset.orig || 'regular';
-      pwdCell.textContent = pwdCell.dataset.orig || 'none';
-      editBtn.style.display='inline-block'; tr.querySelector('.mall-del').style.display='inline-block';
-      saveBtn.style.display='none'; cancelBtn.style.display='none';
-    } else if (btn.classList.contains('mall-save')){
-      const newName = nameCell.querySelector('input').value.trim();
-      const newContact = contactCell.querySelector('input').value.trim();
-      const newType = typeCell.querySelector('select').value;
-      const newPwd = pwdCell.querySelector('select').value;
-      try {
-        await update(ref(dbMall, '/users/' + uid), {
-          displayName: newName,
-          contactNumber: newContact,
-          isPWD: newType === 'pwd',
-          pwdStatus: newPwd,
-        });
-        usersData[uid] = { ...(usersData[uid]||{}), displayName:newName, contactNumber:newContact, isPWD:(newType==='pwd'), pwdStatus:newPwd };
-        renderUsers();
-      } catch(err){ alert('Save failed'); }
-    } else if (btn.classList.contains('mall-del')){
-      const u = usersData[uid] || {};
+    if (btn.classList.contains('mall-del')){
+      const u = targetData;
       if (u.activeTransaction){
         showMessage('Cannot delete: user has an active transaction.', true);
         return;
       }
-      const displayName = (tr.querySelector('.c-name')?.textContent || '').trim();
+      const displayName = (u.displayName || '').trim();
       pendingDeleteUid = uid;
+      pendingDeleteMeta = {
+        uid,
+        displayName,
+        email: u.email || '',
+        contact: u.contactNumber || '',
+      };
       deleteModalText.textContent = `Delete user "${displayName || uid}"? This removes their account and profile.`;
       deleteModal.classList.add('show');
+    } else if (btn.classList.contains('mall-ban')){
+      const displayName = (targetData.displayName || '').trim();
+      pendingBanUid = uid;
+      pendingBanMeta = {
+        uid,
+        displayName,
+        email: targetData.email || '',
+        contact: targetData.contactNumber || ''
+      };
+      banReasonInput.value = '';
+      if (banCharCount) banCharCount.textContent = '0 / 50';
+      if (banModalText) banModalText.textContent = `Ban "${displayName || uid}"? They will be blocked from future registrations.`;
+      banModal?.classList.add('show');
+      banModal?.setAttribute('aria-hidden', 'false');
     }
   });
 
@@ -270,10 +269,12 @@
   deleteCancelBtn?.addEventListener('click', ()=>{
     deleteModal?.classList.remove('show');
     pendingDeleteUid = null;
+    pendingDeleteMeta = null;
   });
 
   deleteConfirmBtn?.addEventListener('click', async ()=>{
     if (!pendingDeleteUid) return;
+    const meta = pendingDeleteMeta || {};
     try {
       const res = await fetch('/api/delete-user/', {
         method: 'POST',
@@ -284,6 +285,10 @@
       if (!res.ok || js.ok === false) {
         throw new Error(js.error || 'Request failed');
       }
+      await logAuditEntry('delete', {
+        ...meta,
+        details: 'Account removed',
+      });
       delete usersData[pendingDeleteUid];
       renderUsers();
       showMessage('User deleted.');
@@ -292,9 +297,107 @@
       showMessage('Delete failed. ' + (err.message || ''), true);
     } finally {
       pendingDeleteUid = null;
+      pendingDeleteMeta = null;
       deleteModal?.classList.remove('show');
     }
   });
+
+  banReasonInput?.addEventListener('input', ()=>{
+    if (!banReasonInput) return;
+    if (banReasonInput.value.length > 50) {
+      banReasonInput.value = banReasonInput.value.substring(0, 50);
+    }
+    if (banCharCount) banCharCount.textContent = `${banReasonInput.value.length} / 50`;
+  });
+
+  banCancelBtn?.addEventListener('click', ()=>{
+    banModal?.classList.remove('show');
+    banModal?.setAttribute('aria-hidden', 'true');
+    pendingBanUid = null;
+    pendingBanMeta = null;
+  });
+
+  banConfirmBtn?.addEventListener('click', async ()=>{
+    if (!pendingBanUid) return;
+    const meta = pendingBanMeta || {};
+    const reason = (banReasonInput?.value || '').trim();
+    try {
+      banConfirmBtn.disabled = true;
+      const res = await fetch('/api/ban-user/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: pendingBanUid, reason })
+      });
+      const js = await res.json().catch(()=>({}));
+      if (!res.ok || js.ok === false) {
+        throw new Error(js.error || 'Request failed');
+      }
+      await logAuditEntry('ban', {
+        ...meta,
+        reason,
+        details: 'User banned from registration'
+      });
+      delete usersData[pendingBanUid];
+      renderUsers();
+      showMessage('User banned.');
+    } catch(err){
+      console.error(err);
+      showMessage('Ban failed. ' + (err.message || ''), true);
+    } finally {
+      banConfirmBtn.disabled = false;
+      pendingBanUid = null;
+       pendingBanMeta = null;
+      banModal?.classList.remove('show');
+      banModal?.setAttribute('aria-hidden', 'true');
+    }
+  });
+
+  function fmtDate(ts){
+    if (!ts && ts !== 0) return '-';
+    try { return new Date(ts).toLocaleString(); } catch(_){ return '-'; }
+  }
+
+  async function logAuditEntry(action, meta){
+    try {
+      const entry = {
+        action,
+        targetUid: meta.uid || '',
+        targetName: meta.displayName || '',
+        targetEmail: meta.email || '',
+        targetContact: meta.contact || '',
+        reason: meta.reason || '',
+        details: meta.details || '',
+        performedBy: actorEmail,
+        timestamp: Date.now()
+      };
+      await set(push(ref(dbMall, '/auditTrail')), entry);
+    } catch (err) {
+      console.error('Failed to log audit entry', err);
+    }
+  }
+
+  function renderAudit(){
+    if (!auditBody) return;
+    const entries = Object.entries(auditMap || {})
+      .map(([key, value]) => ({ key, ...(value || {}) }))
+      .filter(item => !item.performedBy || (item.performedBy || '') === actorEmail);
+    entries.sort((a,b)=> (b.timestamp||0) - (a.timestamp||0));
+    if (!entries.length){
+      auditBody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#777;">No audit entries yet…</td></tr>`;
+      return;
+    }
+    const rows = entries.map((entry)=>{
+      const detail = entry.reason ? `${entry.details || ''} (Reason: ${entry.reason})`.trim() : (entry.details || '');
+      const targetLabel = entry.targetName ? `${entry.targetName} (${entry.targetEmail || entry.targetUid || ''})` : (entry.targetEmail || entry.targetUid || 'Unknown');
+      return `<tr>
+        <td>${fmtDate(entry.timestamp)}</td>
+        <td style="text-transform:capitalize;">${entry.action || ''}</td>
+        <td>${targetLabel}</td>
+        <td>${detail || '-'}</td>
+      </tr>`;
+    });
+    auditBody.innerHTML = rows.join('');
+  }
 </script>
 {% endif %}
 
@@ -404,10 +507,8 @@
 <style>
   .actions{ display:flex; flex-wrap:wrap; gap:6px; }
   .btn{ padding:.35rem .6rem; border:none; border-radius:8px; cursor:pointer; font-weight:700; }
-  .btn-edit{ background:#e6f0ff; color:#103d85; }
-  .btn-save{ background:#e7f8ed; color:#0e7a3d; }
-  .btn-cancel{ background:#fff1cf; color:#9a6a00; }
   .btn-del{ background:#ffe1e1; color:#b40000; }
+  .btn-ban{ background:#ffeecd; color:#9a5400; }
   .btn:hover{ filter:brightness(.98); }
   .img-modal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:1000; }
   .img-modal.show{ display:flex; }
@@ -425,6 +526,10 @@
   .modal-actions button{ padding:.45rem .9rem; border:none; border-radius:8px; cursor:pointer; font-weight:600; }
   .modal-actions .secondary{ background:#f3f3f3; color:#333; }
   .modal-actions .danger{ background:#ffe1e1; color:#b40000; }
+  .modal-label{ display:block; margin:.75rem 0 .35rem; font-weight:600; color:#444; }
+  .modal-box textarea{ width:100%; min-height:90px; border:1px solid #ddd; border-radius:8px; padding:.6rem; resize:vertical; font-family:inherit; box-sizing:border-box; margin:0 auto; text-align:left; }
+  .modal-box textarea:focus{ outline:2px solid #e6c45d; border-color:#e6c45d; }
+  .modal-count{ margin-top:.35rem; text-align:right; font-size:12px; color:#777; }
 </style>
 <div id="messageBox" class="flash-msg"></div>
 <div id="imgModal" class="img-modal">
@@ -439,6 +544,19 @@
     <div class="modal-actions">
       <button type="button" id="deleteCancelBtn" class="secondary">Cancel</button>
       <button type="button" id="deleteConfirmBtn" class="danger">Delete</button>
+    </div>
+  </div>
+</div>
+<div id="banModal" class="modal-backdrop" aria-hidden="true">
+  <div class="modal-box">
+    <h3 style="margin-top:0;">Ban User</h3>
+    <p id="banModalText"></p>
+    <label class="modal-label" for="banReasonInput">Reason (optional, 50 characters max)</label>
+    <textarea id="banReasonInput" maxlength="50" placeholder="Enter reason (optional)"></textarea>
+    <div class="modal-count"><span id="banCharCount">0 / 50</span></div>
+    <div class="modal-actions">
+      <button type="button" id="banCancelBtn" class="secondary">Cancel</button>
+      <button type="button" id="banConfirmBtn" class="danger">Ban</button>
     </div>
   </div>
 </div>

@@ -7,15 +7,17 @@
     <h2>Create Account</h2>
     {% for msg in messages %}<p style="color:red;">{{ msg }}</p>{% endfor %}
     <form method="post">{% csrf_token %}
-      <label>Full Name <input type="text" name="name" required></label>
-      <label>Email <input type="email" name="email" required></label>
-      <label>Password <input type="password" name="password" required placeholder="8+ chars, upper/lower/special"></label>
-      <label>Role
-        <select name="role" required>
-          <option value="admin">Admin</option>
-          <option value="mall_owner">Mall Owner</option>
-        </select>
-      </label>
+      <label>Username</label>
+      <input type="text" name="name" required>
+      <label>Email</label>
+      <input type="email" name="email" required>
+      <label>Password</label>
+      <input type="password" name="password" required placeholder="8+ characters, upper/lower/special">
+      <label>Role</label>
+      <select name="role" required>
+        <option value="admin">Admin</option>
+        <option value="mall_owner">Mall Owner</option>
+      </select>
       <button type="submit">Register</button>
     </form>
     <p style="text-align:center;margin-top:1rem; font-size: 0.9rem; color:#666;">
